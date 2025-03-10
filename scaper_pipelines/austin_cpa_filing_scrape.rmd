@@ -54,6 +54,9 @@ financial_markers <- c('LTD',
 
 financial_marker_string <- paste(financial_markers, collapse = '|')
 ```
+## R Markdown
+
+
 
 ```{r}
 library(rvest)
@@ -75,6 +78,7 @@ library(foreach)
 
 
 get_business_details = function(business_string, business_name){
+
   ttn_matches <- regmatches(business_string,
                             regexpr("(?<=Texas Taxpayer Number ).*(?=\\n)",
                                     business_string, 
@@ -84,22 +88,22 @@ get_business_details = function(business_string, business_name){
                             regexpr("(?<=Mailing Address ).*(?=\\n)",
                                     business_string, 
                                     perl = TRUE))
+
   right_to_transact_status <- regmatches(business_string,
               regexpr("(?<=Right to Transact Business in Texas ).*(?=\\n)",
                                     business_string, perl = TRUE))
-  
   state_of_formation <- regmatches(business_string,
                             regexpr("(?<=State of Formation ).*(?=\\n)",
                                     business_string, perl = TRUE))
-  
   sos_registration_status <- regmatches(business_string,
                             regexpr("(?<=updated each business day\\) ).*(?=\\n)",
                                     business_string, perl = TRUE))
   
+  
   effective_sos_reg_date <- regmatches(business_string,
                             regexpr("(?<=SOS Registration Date ).*(?=\\n)",
                                     business_string, perl = TRUE))
-    
+  
   tx_sos_file_num <- regmatches(business_string,
                             regexpr("(?<=SOS File Number ).*(?=\\n)",
                                     business_string, perl = TRUE))
@@ -107,7 +111,7 @@ get_business_details = function(business_string, business_name){
   registered_agent_name <- regmatches(business_string,
                             regexpr("(?<=Registered Agent Name ).*(?=\\n)",
                                     business_string, perl = TRUE))
-  
+
   registered_agent_mail_add <- regmatches(business_string,
             regexpr("(?<=Registered Office Street Address ).*(?=$)",
                               business_string,  perl = TRUE))
@@ -127,6 +131,34 @@ get_business_details = function(business_string, business_name){
 }
 
 
+type_name = function(entity_name_search_box,
+                     name
+                     ){
+  elem_set_value(entity_name_search_box,
+                 trimws(gsub(',?[[:space:]]{1}(?=LTD|LLC|LLLP|LP|INC)',
+                             ', ',
+                             name,
+                             perl = TRUE)
+                        )
+                 )
+}
+
+wait_to_click = function(element){
+  element %>%
+    elem_expect(is_present) %>%
+    elem_click()
+  
+}
+
+officer_business_bind = function(owner_table,
+                                 business_details_table_parse
+                                 ){
+  foreach(index = 1:nrow(owner_table),
+                       .combine = 'rbind') %do% {
+                         cbind(owner_table[index,],
+                               business_details_table_parse)
+      }
+}
 scrape_owner = function(owner_name,
                         situs_pID,
                         situs_address,
@@ -147,36 +179,44 @@ scrape_owner = function(owner_name,
   
   open_url("https://mycpa.cpa.state.tx.us/coa/")
   
+  
   entity_name_search_box <- s("#entityName")
   search_button <- s("#search")
   details_button <- s('.getDetails')
   
   # Search name
-  elem_set_value(entity_name_search_box,
-                 trimws(gsub(',?[[:space:]]{1}(?=LTD|LLC|LLLP|LP|INC)',
-                             ', ',
-                             owner_name,
-                             perl = TRUE)
-                        )
-                 )
+  type_name(entity_name_search_box,
+            owner_name)
   
-  elem_click(search_button)
-  elem_click(details_button)
-
+  wait_to_click(search_button)
+  wait_to_click(details_button)
   
-  business_name <- s('#businessEntityName') %>% elem_text()
+  
+  business_name <- s('#businessEntityName') %>%
+                      elem_expect(is_present && is_visible,
+                                  timeout = 180) %>%
+                      elem_text()
     
-  business_details <- s('#trDetailsBody') %>% elem_text()
+  business_details <- s('#trDetailsBody') %>% 
+                        elem_expect(is_present && is_visible,
+                                    timeout = 180) %>%
+                          elem_text()
   
   business_details_table_parse = get_business_details(business_details,
                                                 business_name)
+  
   #officer button appears after search
-  officer_button <- s(class='panel-heading', id = 'panel-heading') %>% 
+
+  officer_button <- s(class='panel-heading', id = 'panel-heading') %>%
+    elem_expect(is_present) %>%
     find_elements('a')
   
-  elem_click(officer_button[[2]])
+  wait_to_click(officer_button[[2]])
   
-  officer <- tryCatch({s('#officeTable') %>% find_element('tbody')},
+  officer <- tryCatch({s('#officeTable') %>%
+                      elem_expect(is_present && is_visible,
+                                  timeout = 180) %>%
+                        find_element('tbody')},
                       error = function(cond){
                               cond
                               }
@@ -189,11 +229,8 @@ scrape_owner = function(owner_name,
                              owner_title = owner_title,
                              owner_mail_address = owner_address)
       
-      results =  foreach(index = 1:nrow(owner_table),
-                       .combine = 'rbind') %do% {
-                         cbind(owner_table[index,],
-                               business_details_table_parse)
-      }
+      results = officer_business_bind(owner_table,
+                                      business_details_table_parse)
 
     }
     #no results on base owner search
@@ -203,11 +240,8 @@ scrape_owner = function(owner_name,
                              owner_title = NA,
                              owner_mail_address = NA)
       
-      results = foreach(index = 1:nrow(owner_table),
-                       .combine = 'rbind') %do% {
-                         cbind(owner_table[index,],
-                               business_details_table_parse)
-      }
+      results = officer_business_bind(owner_table,
+                                      business_details_table_parse)
 
     }
     
@@ -252,11 +286,8 @@ scrape_owner = function(owner_name,
                                                      owner_title = owner_title_parse[ind],
                                                      owner_address = owner_address_parse[ind])
                              
-                             return(foreach(index = 1:nrow(owner_fin),
-                                            .combine = 'rbind') %do% {
-                                              cbind(owner_fin[index,],
-                                                    business_details_table_parse)
-                                            }
+                             return(officer_business_bind(owner_table,
+                                      business_details_table_parse)
                                     )
                            }
                           return(fin_owner_scrape)
@@ -269,11 +300,8 @@ scrape_owner = function(owner_name,
                              owner_title = owner_title_parse,
                              owner_address = owner_address_parse)[!finance_inds,]
         
-        owners_non_fin =foreach(index = 1:nrow(owners_non_fin),
-                       .combine = 'rbind') %do% {
-                         cbind(owners_non_fin[index,],
-                               business_details_table_parse)
-                         }
+        owners_non_fin =officer_business_bind(owner_table,
+                                      business_details_table_parse)
         
         results = data.frame(rbind(owners_fin,
                                      owners_non_fin))
@@ -289,11 +317,8 @@ scrape_owner = function(owner_name,
                              owner_title = owner_title_parse,
                              owner_mail_address = owner_address_parse)
      
-      results <-  foreach(index = 1:nrow(owner_table),
-                       .combine = 'rbind') %do% {
-                         cbind(owner_table[index,],
-                               business_details_table_parse)
-      }
+      results <- officer_business_bind(owner_table,
+                                      business_details_table_parse)
 
     }
   }
@@ -302,12 +327,17 @@ scrape_owner = function(owner_name,
   results$situs_address <- situs_address
   results$veneer_owner <- veneer_owner
   results$veneer_owner_mail_address <- veneer_owner_mail_address
+  
+  # selenider::close_session(session)
 
   return(results)
 }
 
 ```
 
+cpa_session %>%
+    html_element("div#wrapper") %>%
+    html_element("div#content") %>% html_element("form") %>% html_element("div") %>% html_element("div.panel panel-primary")
 ```{r}
 
 
@@ -316,11 +346,13 @@ doFuture::registerDoFuture()
 plan(multisession)
 print(Sys.time())
 server <- selenium_server(path = getwd())
-wait_for_selenium_available(error = TRUE)
-owner_data <- foreach(index =1:10,#nrow(target_properties),
+
+owner_data <- foreach(index =1:1000,#nrow(target_properties),
                       .combine = 'rbind',
                       .options.RNG = 8989,
                       .export = financial_marker_string) %dorng% {
+                        wait_for_selenium_available(error = TRUE)
+                        Sys.sleep(5)
                         
                         owner_name =target_properties$owner_name[index]
                         owner_address = target_properties$owner_address[index]
@@ -350,8 +382,13 @@ owner_data <- foreach(index =1:10,#nrow(target_properties),
                         
                         
                         }
+#.getDetails
+
+#trDetailsBody
+#officeTable
+
 print(Sys.time())
 
-write.csv(owner_data,'owner_data.csv')
+# write.csv(owner_data,'owner_data.csv')
 
 ```
