@@ -1,0 +1,357 @@
+---
+title: "austin_cpa_corpo_filings"
+output: html_document
+date: "2025-03-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+financial_markers <- c('LTD',
+                       'L T D',
+                       'LLC',
+                       'L L C',
+                       'LP',
+                       'L P',
+                       'LLLP',
+                       'L L L P',
+                       'MORTG',
+                       'RENT',
+                       'MARKET',
+                       'INVEST',
+                       'PROP',
+                       'MANAGE',
+                       'MGT',
+                       'MGMT',
+                       'ASSET',
+                       'JOINT',
+                       'VENTURE',
+                       'VNT',
+                       'INC',
+                       'I N C',
+                       'LC',
+                       'L C',
+                       'LIMIT',
+                       'PARTN',
+                       'PRTN',
+                       'BANK',
+                       'ASSOC',
+                       'EQUIT',
+                       'REALT',
+                       'OWNER',
+                       'HOLDING',
+                       'DEVELOP',
+                       'COMP',
+                       'CORP',
+                       'AQUISI',
+                       'CONDO',
+                       'C/O',
+                       '[[:digit:]]',
+                       'BORROWER')
+
+
+financial_marker_string <- paste(financial_markers, collapse = '|')
+```
+
+```{r}
+library(rvest)
+library(selenider)
+library(tidyverse)
+library(selenium)
+library(chromote)
+
+local_chrome_version(chromote::chrome_versions_list()[[2,1]])#"113.0.5672.0")
+
+
+target_properties <- read_csv('target_properties.csv')
+target_properties[,grepl('^X',
+                         colnames(target_properties)
+                         )] <- NULL
+
+library(future)
+library(foreach)
+
+
+get_business_details = function(business_string, business_name){
+  ttn_matches <- regmatches(business_string,
+                            regexpr("(?<=Texas Taxpayer Number ).*(?=\\n)",
+                                    business_string, 
+                                    perl = TRUE))
+  
+  mail_add_matches <- regmatches(business_string,
+                            regexpr("(?<=Mailing Address ).*(?=\\n)",
+                                    business_string, 
+                                    perl = TRUE))
+  right_to_transact_status <- regmatches(business_string,
+              regexpr("(?<=Right to Transact Business in Texas ).*(?=\\n)",
+                                    business_string, perl = TRUE))
+  
+  state_of_formation <- regmatches(business_string,
+                            regexpr("(?<=State of Formation ).*(?=\\n)",
+                                    business_string, perl = TRUE))
+  
+  sos_registration_status <- regmatches(business_string,
+                            regexpr("(?<=updated each business day\\) ).*(?=\\n)",
+                                    business_string, perl = TRUE))
+  
+  effective_sos_reg_date <- regmatches(business_string,
+                            regexpr("(?<=SOS Registration Date ).*(?=\\n)",
+                                    business_string, perl = TRUE))
+    
+  tx_sos_file_num <- regmatches(business_string,
+                            regexpr("(?<=SOS File Number ).*(?=\\n)",
+                                    business_string, perl = TRUE))
+  
+  registered_agent_name <- regmatches(business_string,
+                            regexpr("(?<=Registered Agent Name ).*(?=\\n)",
+                                    business_string, perl = TRUE))
+  
+  registered_agent_mail_add <- regmatches(business_string,
+            regexpr("(?<=Registered Office Street Address ).*(?=$)",
+                              business_string,  perl = TRUE))
+  
+  business_details_table = data.frame(corp_business_name = business_name,
+              corp_TTN = ttn_matches,
+             corp_mail_address = mail_add_matches,
+             corp_right_to_transact_business_tx_status = right_to_transact_status,
+             corp_state_of_formation = state_of_formation ,
+             corp_sos_registration_status = sos_registration_status,
+             corp_effective_sos_registration_date = effective_sos_reg_date,
+             corp_tx_sos_file_num = tx_sos_file_num,
+             corp_registered_agent_name = registered_agent_name,
+             corp_registered_agent_mail_address = registered_agent_mail_add)
+  
+  return(business_details_table)
+}
+
+
+scrape_owner = function(owner_name,
+                        situs_pID,
+                        situs_address,
+                        veneer_owner,
+                       veneer_owner_mail_address,
+                       depth = 0,
+                       owner_title = NA,
+                       owner_mail_address = NA,
+                       business_details_table = NA){
+  session <- selenider_session(session = "selenium",
+                             browser = 'chrome',
+                  options = selenium_options(selenium_client_options(capabilities = 
+                                                                       selenium::chrome_options(args=c('--headless',
+                                                                            "--disable-gpu")),
+                                                                                timeout = 60))
+                             )
+  # Go to global website
+  
+  open_url("https://mycpa.cpa.state.tx.us/coa/")
+  
+  entity_name_search_box <- s("#entityName")
+  search_button <- s("#search")
+  details_button <- s('.getDetails')
+  
+  # Search name
+  elem_set_value(entity_name_search_box,
+                 trimws(gsub(',?[[:space:]]{1}(?=LTD|LLC|LLLP|LP|INC)',
+                             ', ',
+                             owner_name,
+                             perl = TRUE)
+                        )
+                 )
+  
+  elem_click(search_button)
+  elem_click(details_button)
+
+  
+  business_name <- s('#businessEntityName') %>% elem_text()
+    
+  business_details <- s('#trDetailsBody') %>% elem_text()
+  
+  business_details_table_parse = get_business_details(business_details,
+                                                business_name)
+  #officer button appears after search
+  officer_button <- s(class='panel-heading', id = 'panel-heading') %>% 
+    find_elements('a')
+  
+  elem_click(officer_button[[2]])
+  
+  officer <- tryCatch({s('#officeTable') %>% find_element('tbody')},
+                      error = function(cond){
+                              cond
+                              }
+                      ) 
+  if('error' %in% class(officer)){
+    # print('1.1')
+    #no results on a recursive owner search
+    if(depth>0 ){
+      owner_table = data.frame(owner_name = owner_name,
+                             owner_title = owner_title,
+                             owner_mail_address = owner_address)
+      
+      results =  foreach(index = 1:nrow(owner_table),
+                       .combine = 'rbind') %do% {
+                         cbind(owner_table[index,],
+                               business_details_table_parse)
+      }
+
+    }
+    #no results on base owner search
+    if(depth==0 ){
+      # print('1.2')
+      owner_table = data.frame(owner_name = NA,
+                             owner_title = NA,
+                             owner_mail_address = NA)
+      
+      results = foreach(index = 1:nrow(owner_table),
+                       .combine = 'rbind') %do% {
+                         cbind(owner_table[index,],
+                               business_details_table_parse)
+      }
+
+    }
+    
+  }
+  
+  #found results
+  else{
+    # print('officer')
+    officer_info_lines <- strsplit(officer %>% elem_text(), 
+                                 split = '\\n')[[1]]
+ 
+    owner_name_parse <- sapply(as.list(officer %>% find_elements('b')),
+                       elem_text) 
+    owner_title_parse <- sapply(as.list(officer %>% find_elements('td')),
+                        elem_text)[seq(1, length(officer_info_lines), 2)]
+    owner_address_parse <- officer_info_lines[seq(2, length(officer_info_lines), 2)]
+    #selenider::close_session(session)
+    finance_inds <- grepl(financial_marker_string,
+                          owner_name_parse)
+    
+    if(sum(finance_inds)>0){
+      # print('2.1')
+      owners_fin = foreach(ind = which(finance_inds),
+                        .combine = 'rbind') %do% {
+                          fin_owner_scrape = tryCatch({
+                             scrape_owner( owner_name_parse[ind],
+                                         situs_pID = situs_pID , 
+                                         situs_address = situs_address,
+                                         veneer_owner = veneer_owner,
+                                         veneer_owner_mail_address = veneer_owner_mail_address,
+                                         depth = depth+1,
+                                         owner_title = owner_title_parse[ind],
+                                         owner_mail_address = owner_address_parse[ind],
+                                         business_details_table = business_details_table_parse )
+                            },error = function(cond){
+                              cond
+                              })
+                          
+                           if('error' %in% class(fin_owner_scrape)){
+                             print('error')
+                             owner_fin = data.frame(owner_name = owner_name_parse[ind],
+                                                     owner_title = owner_title_parse[ind],
+                                                     owner_address = owner_address_parse[ind])
+                             
+                             return(foreach(index = 1:nrow(owner_fin),
+                                            .combine = 'rbind') %do% {
+                                              cbind(owner_fin[index,],
+                                                    business_details_table_parse)
+                                            }
+                                    )
+                           }
+                          return(fin_owner_scrape)
+        
+                        }
+      
+      if(sum(!finance_inds)>0){
+        # print('2.2')
+        owners_non_fin = data.frame(owner_name = owner_name_parse,
+                             owner_title = owner_title_parse,
+                             owner_address = owner_address_parse)[!finance_inds,]
+        
+        owners_non_fin =foreach(index = 1:nrow(owners_non_fin),
+                       .combine = 'rbind') %do% {
+                         cbind(owners_non_fin[index,],
+                               business_details_table_parse)
+                         }
+        
+        results = data.frame(rbind(owners_fin,
+                                     owners_non_fin))
+      }
+      else{
+        # print('2.3')
+        results = owners_fin
+      }
+    }
+    else{
+      # print('3')
+      owner_table = data.frame(owner_name = owner_name_parse,
+                             owner_title = owner_title_parse,
+                             owner_mail_address = owner_address_parse)
+     
+      results <-  foreach(index = 1:nrow(owner_table),
+                       .combine = 'rbind') %do% {
+                         cbind(owner_table[index,],
+                               business_details_table_parse)
+      }
+
+    }
+  }
+  
+  results$situs_pID <- situs_pID
+  results$situs_address <- situs_address
+  results$veneer_owner <- veneer_owner
+  results$veneer_owner_mail_address <- veneer_owner_mail_address
+
+  return(results)
+}
+
+```
+
+```{r}
+
+
+library(doRNG)
+doFuture::registerDoFuture()
+plan(multisession)
+print(Sys.time())
+server <- selenium_server(path = getwd())
+wait_for_selenium_available(error = TRUE)
+owner_data <- foreach(index =1:10,#nrow(target_properties),
+                      .combine = 'rbind',
+                      .options.RNG = 8989,
+                      .export = financial_marker_string) %dorng% {
+                        
+                        owner_name =target_properties$owner_name[index]
+                        owner_address = target_properties$owner_address[index]
+                        situs_pID = target_properties$situs_pID[index]
+                        situs_address = target_properties$situs_address[index]
+                        
+                        print(owner_name)
+                        property_owner_info <- tryCatch({scrape_owner(owner_name, 
+                                     situs_pID = situs_pID , 
+                                     situs_address = situs_address,
+                                     veneer_owner = owner_name,
+                                     veneer_owner_mail_address = owner_address)},
+                                 error=function(cond){
+                                   cond}
+                                 )
+                        # print(property_owner_info)
+                        if('error' %in% class(property_owner_info)){
+                          property_owner_info <- c(rep(NA, 13),
+                                   situs_pID,
+                                   situs_address,
+                                   owner_name,
+                                   
+                                   owner_address)
+                        }
+                        
+                        return(property_owner_info)
+                        
+                        
+                        }
+print(Sys.time())
+
+write.csv(owner_data,'owner_data.csv')
+
+```
