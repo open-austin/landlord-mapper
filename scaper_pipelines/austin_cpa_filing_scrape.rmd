@@ -1,7 +1,7 @@
 ---
 title: "austin_cpa_corpo_filings"
 output: html_document
-date: "2025-03-09"
+date: "2025-01-27"
 ---
 
 ```{r setup, include=FALSE}
@@ -65,9 +65,7 @@ library(tidyverse)
 library(selenium)
 library(chromote)
 
-local_chrome_version(chromote::chrome_versions_list()[[2,1]])#"113.0.5672.0")
-
-
+# user_agent = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/60.0.3112.50 Safari/537.36'
 target_properties <- read_csv('target_properties.csv')
 target_properties[,grepl('^X',
                          colnames(target_properties)
@@ -98,7 +96,6 @@ get_business_details = function(business_string, business_name){
   sos_registration_status <- regmatches(business_string,
                             regexpr("(?<=updated each business day\\) ).*(?=\\n)",
                                     business_string, perl = TRUE))
-  
   
   effective_sos_reg_date <- regmatches(business_string,
                             regexpr("(?<=SOS Registration Date ).*(?=\\n)",
@@ -145,7 +142,8 @@ type_name = function(entity_name_search_box,
 
 wait_to_click = function(element){
   element %>%
-    elem_expect(is_present) %>%
+    elem_expect(is_present && is_visible, 
+                timeout = 60) %>%
     elem_click()
   
 }
@@ -170,11 +168,23 @@ scrape_owner = function(owner_name,
                        business_details_table = NA){
   session <- selenider_session(session = "selenium",
                              browser = 'chrome',
-                  options = selenium_options(selenium_client_options(capabilities = 
-                                                                       selenium::chrome_options(args=c('--headless',
-                                                                            "--disable-gpu")),
-                                                                                timeout = 60))
-                             )
+                  # options = chromote_options(headless = FALSE),
+                  driver = list(selenium_server(version = '4.29.0',
+                                                  interactive = FALSE,
+                                                  path = getwd(), temp = TRUE),
+                                SeleniumSession$new(browser = 'chrome',
+                    capabilities = selenium::chrome_options(args=c('--headless',
+                  '--no-sandbox',
+                  '--disable-extensions',
+                  '--disable-browser-side-navigation',
+                  '--disable-dev-shm-usage',
+                  "--disable-gpu",
+                  "--proxy-server='direct://'",
+                  '--proxy-bypass-list=*')),
+                    timeout = 60))
+                  ,
+                  timeout = 60
+                  )
   # Go to global website
   
   open_url("https://mycpa.cpa.state.tx.us/coa/")
@@ -187,35 +197,36 @@ scrape_owner = function(owner_name,
   # Search name
   type_name(entity_name_search_box,
             owner_name)
-  
+ 
   wait_to_click(search_button)
+  
   wait_to_click(details_button)
   
-  
+
   business_name <- s('#businessEntityName') %>%
                       elem_expect(is_present && is_visible,
-                                  timeout = 180) %>%
+                                  timeout = 60) %>%
                       elem_text()
-    
+
   business_details <- s('#trDetailsBody') %>% 
                         elem_expect(is_present && is_visible,
-                                    timeout = 180) %>%
+                                    timeout = 60) %>%
                           elem_text()
-  
+ 
   business_details_table_parse = get_business_details(business_details,
                                                 business_name)
   
   #officer button appears after search
 
   officer_button <- s(class='panel-heading', id = 'panel-heading') %>%
-    elem_expect(is_present) %>%
+    elem_expect(is_present && is_visible, timeout = 60) %>%
     find_elements('a')
   
   wait_to_click(officer_button[[2]])
   
   officer <- tryCatch({s('#officeTable') %>%
                       elem_expect(is_present && is_visible,
-                                  timeout = 180) %>%
+                                  timeout = 60) %>%
                         find_element('tbody')},
                       error = function(cond){
                               cond
@@ -258,7 +269,7 @@ scrape_owner = function(owner_name,
     owner_title_parse <- sapply(as.list(officer %>% find_elements('td')),
                         elem_text)[seq(1, length(officer_info_lines), 2)]
     owner_address_parse <- officer_info_lines[seq(2, length(officer_info_lines), 2)]
-    #selenider::close_session(session)
+    # selenider::close_session(session)
     finance_inds <- grepl(financial_marker_string,
                           owner_name_parse)
     
@@ -286,11 +297,10 @@ scrape_owner = function(owner_name,
                                                      owner_title = owner_title_parse[ind],
                                                      owner_address = owner_address_parse[ind])
                              
-                             return(officer_business_bind(owner_table,
+                             fin_owner_scrape = officer_business_bind(owner_fin,
                                       business_details_table_parse)
-                                    )
                            }
-                          return(fin_owner_scrape)
+                          fin_owner_scrape
         
                         }
       
@@ -300,7 +310,8 @@ scrape_owner = function(owner_name,
                              owner_title = owner_title_parse,
                              owner_address = owner_address_parse)[!finance_inds,]
         
-        owners_non_fin =officer_business_bind(owner_table,
+        
+        owners_non_fin =officer_business_bind(owners_non_fin,
                                       business_details_table_parse)
         
         results = data.frame(rbind(owners_fin,
@@ -338,28 +349,42 @@ scrape_owner = function(owner_name,
 cpa_session %>%
     html_element("div#wrapper") %>%
     html_element("div#content") %>% html_element("form") %>% html_element("div") %>% html_element("div.panel panel-primary")
-```{r}
+```{r,cache=TRUE, cache.extra=file.mtime("owner_data.csv")}
 
-
+library(memoise)
 library(doRNG)
 doFuture::registerDoFuture()
 plan(multisession)
 print(Sys.time())
-server <- selenium_server(path = getwd())
-
-owner_data <- foreach(index =1:1000,#nrow(target_properties),
+colnames_used <- c('owner_name',
+                   'owner_title',
+                   'owner_mail_address',
+                   'corp_business_name',
+                   'corp_TTN',
+                   'corp_mail_address',
+                   'corp_right_to_transact_business_tx_status',
+                   'corp_state_of_formation',
+                   'corp_sos_registration_status',
+                   'corp_effective_sos_registration_date',
+                   'corp_tx_sos_file_num',
+                   'corp_registered_agent_name',
+                   'corp_registered_agent_mail_address',
+                   'situs_pID',
+                   'situs_address',
+                   'veneer_owner',
+                   'veneer_owner_mail_address')
+owner_data <- foreach(index =101:nrow(target_properties),
                       .combine = 'rbind',
                       .options.RNG = 8989,
                       .export = financial_marker_string) %dorng% {
-                        wait_for_selenium_available(error = TRUE)
-                        Sys.sleep(5)
-                        
+
+
                         owner_name =target_properties$owner_name[index]
                         owner_address = target_properties$owner_address[index]
                         situs_pID = target_properties$situs_pID[index]
                         situs_address = target_properties$situs_address[index]
-                        
-                        print(owner_name)
+                        message(index)
+                        message(owner_name)
                         property_owner_info <- tryCatch({scrape_owner(owner_name, 
                                      situs_pID = situs_pID , 
                                      situs_address = situs_address,
@@ -368,27 +393,24 @@ owner_data <- foreach(index =1:1000,#nrow(target_properties),
                                  error=function(cond){
                                    cond}
                                  )
-                        # print(property_owner_info)
+                        
                         if('error' %in% class(property_owner_info)){
-                          property_owner_info <- c(rep(NA, 13),
+                          property_owner_info <- data.frame(t(c(rep(NA, 13),
                                    situs_pID,
                                    situs_address,
                                    owner_name,
                                    
-                                   owner_address)
+                                   owner_address)))
                         }
+                        
+                        colnames(property_owner_info) <- colnames_used
                         
                         return(property_owner_info)
-                        
-                        
-                        }
-#.getDetails
+                      }
 
-#trDetailsBody
-#officeTable
 
 print(Sys.time())
 
-# write.csv(owner_data,'owner_data.csv')
+write.csv(owner_data,'owner_data.csv')
 
 ```
