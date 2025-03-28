@@ -1,0 +1,342 @@
+---
+title: "austin_TCAD_parse"
+output: html_document
+date: "2025-01-27"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(reticulate)
+# reticulate::conda_list()
+reticulate::virtualenv_create('r-reticulate')
+```
+
+```{python}
+import pandas as pd
+import numpy as np
+import urllib
+import zipfile
+import re
+import ijson
+import multiprocessing
+from multiprocessing import Pool
+situs_pID = list()
+situs_streetNum = list()
+situs_streetPrefix = list()
+situs_streetName = list()
+situs_streetSuffix = list()
+situs_city = list()
+situs_state = list()
+situs_zip = list()
+situs_country = list()
+situs_international = list()
+owner_ID = list()
+owner_name = list()
+owner_nameSecondary = list()
+owner_addrDeliveryLine = list()
+owner_addrUnitDesignator = list()
+owner_addrCity = list()
+owner_addrZip = list()
+owner_addrState = list()
+owner_addrCountry = list()
+owner_addrInternational = list()
+owner_pID = list()
+propertyChar_marketArea = list()
+propertyChar_region = list()
+propertyChar_zoning = list()
+propertyChar_pID = list()
+prefix_list = list()
+
+counter = 0
+TCAD_special_export_file_name = '2024 Special export Supp 9 02052025.zip'
+parcel_file_name = 'Travis-protaxExport-20250206.json'
+
+
+```
+
+
+```{python}
+
+def propChar_add(key, value):
+  if(key=='pID'):
+    if(value is None):
+      propertyChar_pID.append('NA')
+    else:
+      propertyChar_pID.append(value)
+              
+  if(key=='marketArea'):
+    if(value == None):
+      propertyChar_marketArea.append('NA')  
+              
+    else:
+      propertyChar_marketArea.append(value)
+            
+  if(key=='region'):
+    if(value is None):
+      propertyChar_region.append('NA')
+    else:
+      propertyChar_region.append(value)
+            
+  if(key=='zoning'):
+    if(value is None):
+      propertyChar_zoning.append('NA')
+    else:
+              
+      propertyChar_zoning.append(value)
+
+
+with zipfile.ZipFile(TCAD_special_export_file_name,'r') as austin_parcel_data_zip:
+  with austin_parcel_data_zip.open(parcel_file_name) as austin_parcel_data:
+    
+    parser = ijson.parse(austin_parcel_data)
+    for prefix, event, value in parser:
+      
+      if prefix.endswith('.propertyCharacteristics.item'):
+        propChars = ijson.kvitems(parser, 'item.propertyCharacteristics.item')
+        for key, value in propChars:
+          propChar_add(key,value)
+    # if __name__ == '__main__':
+    #   with Pool(multiprocessing.cpu_count()-1) as p:
+    #     p.map(propChar_add, propChars)
+```
+
+```{python}
+def situsChar_add(key,value):
+  if(key=='pID'):
+    if(value is None):
+      situs_pID.append('NA')  
+    else:
+      situs_pID.append(value)
+  if(key=='streetNum'):
+    if(value is None):
+      situs_streetNum.append('NA')
+    else:
+      situs_streetNum.append(value)
+  if(key=='streetPrefix'):
+    if(value is None):
+      situs_streetPrefix.append('NA')
+    else:
+      situs_streetPrefix.append(value)
+  if(key=='streetName'):
+    if(value is None):
+      situs_streetName.append('NA')
+    else:
+      situs_streetName.append(value)
+  if(key=='streetSuffix'):
+    if(value is None):
+      situs_streetSuffix.append('NA')
+    else:
+      situs_streetSuffix.append(value)
+  if(key=='city'):
+    if(value is None):
+      situs_city.append('NA')
+    else:
+      situs_city.append(value)
+  if(key=='state'):
+    if(value is None):
+      situs_state.append('NA')
+    else:
+      situs_state.append(value)
+  if(key=='zip'):
+    if(value is None):
+      situs_zip.append('NA')
+    else:
+      situs_zip.append(value)
+  if(key=='country'):
+    if(value is None):
+      situs_country.append('NA')
+    else:
+      situs_country.append(value)
+  if(key=='international'):
+    if(value is None):
+      situs_international.append('NA')
+    else:
+      situs_international.append(value)
+              
+              
+with zipfile.ZipFile(TCAD_special_export_file_name,'r') as austin_parcel_data_zip:
+  with austin_parcel_data_zip.open(parcel_file_name) as austin_parcel_data:
+    parser = ijson.parse(austin_parcel_data)
+    for prefix, event, value in parser:
+      
+      if prefix.endswith('item.situses.item'):
+        situsChars = ijson.kvitems(parser, prefix)
+
+        for key, value in situsChars:
+          situsChar_add(key, value)
+        
+
+
+def ownerChar_add(x):
+  if(key=='ownerID'):
+    if(value is None):
+      owner_ID.append('NA')
+    else:
+      owner_ID.append(value)
+  if(key=='pID'):
+    if(value is None):
+      owner_pID.append('NA')
+    else:
+      owner_pID.append(value)
+  if(key=='name'):
+    if(value is None):
+      owner_name.append('NA')
+    else:
+      owner_name.append(value)
+  if(key=='nameSecondary'):
+    if(value is None):
+      owner_nameSecondary.append('NA')
+    else:
+      owner_nameSecondary.append(value)
+  if(key=='addrDeliveryLine'):
+    if(value is None):
+      owner_addrDeliveryLine.append('NA')
+    else:
+      owner_addrDeliveryLine.append(value)
+  if(key=='addrUnitDesignator'):
+    if(value is None):
+      owner_addrUnitDesignator.append('NA')
+    else:
+      owner_addrUnitDesignator.append(value)
+  if(key=='addrCity'):
+    if(value is None):
+      owner_addrCity.append('NA')
+    else:
+      owner_addrCity.append(value)
+  if(key=='addrZip'):
+    if(value is None):
+      owner_addrZip.append('NA')
+    else:
+      owner_addrZip.append(value)
+  if(key=='addrState'):
+    if(value is None):
+      owner_addrState.append('NA')
+    else:
+      owner_addrState.append(value)
+  if(key=='addrCountry'):
+    if(value is None):
+      owner_addrCountry.append('NA')
+    else:
+      owner_addrCountry.append(value)
+  if(key=='addrInternational'):
+    if(value is None):
+      owner_addrInternational.append('NA')
+    else:
+      owner_addrInternational.append(value)
+
+with zipfile.ZipFile(TCAD_special_export_file_name,'r') as austin_parcel_data_zip:
+  with austin_parcel_data_zip.open(parcel_file_name) as austin_parcel_data:
+    parser = ijson.parse(austin_parcel_data)
+    for prefix, event, value in parser:
+      if prefix.endswith('.owners'):
+        ownerChars = ijson.kvitems(parser, prefix)
+
+        for key, value in ownerChars:
+          ownerChar_add(key, value)
+    
+
+```
+
+
+```{python}
+deeds_deedDt=list()
+deeds_pID=list()
+deeds_deedID=list()
+deeds_sellerLine=list()
+
+deeds_buyerline=list()
+deeds_deedDt=list()
+
+def deedChar_add(key,value):
+  if(key=='pID'):
+    if(value is None):
+      deeds_pID.append('NA')
+    else:
+      deeds_pID.append(value)
+  if(key=='buyerLine'):
+    if(value is None):
+      deeds_buyerline.append('NA')
+    else:
+      deeds_buyerline.append(value)
+  if(key=='sellerLine'):
+    if(value is None):
+      deeds_sellerLine.append('NA')
+    else:
+      deeds_sellerLine.append(value)
+  if(key=='deedDt'):
+    if(value is None):
+      deeds_deedDt.append('NA')
+    else:
+      deeds_deedDt.append(value)
+  if(key=='deedID'):
+    if(value is None):
+      deeds_deedID.append('NA')
+    else:
+      deeds_deedID.append(value)
+          
+counter=0
+  
+with zipfile.ZipFile(TCAD_special_export_file_name,'r') as austin_parcel_data_zip:
+  with austin_parcel_data_zip.open(parcel_file_name) as austin_parcel_data:
+    parser = ijson.parse(austin_parcel_data)
+
+    deedChars = ijson.kvitems(parser, 'item.deeds.item')
+    # if __name__ == '__main__':
+    #   with Pool(multiprocessing.cpu_count()-1) as p:
+    #     p.map(deedChar_add, deedChars))
+    for key, value in deedChars:
+      deedChar_add(key, value)
+      
+        
+          
+          
+```
+
+
+```{python}
+situs_data =pd.DataFrame({'situs_pID': situs_pID,
+                              'situs_streetNum': situs_streetNum,
+                              'situs_streetPrefix': situs_streetPrefix,
+                              'situs_streetName': situs_streetName,
+                              'situs_streetSuffix': situs_streetSuffix,
+                              'situs_city': situs_city,
+                              'situs_state': situs_state,
+                              'situs_zip': situs_zip,
+                              'situs_country': situs_country,
+                              'situs_international': situs_international})
+                              
+propertyChar_data = pd.DataFrame({'propertyChar_pID':propertyChar_pID,
+                                  'propertyChar_marketArea': propertyChar_marketArea,
+                              'propertyChar_region': propertyChar_region,
+                              'propertyChar_zoning': propertyChar_zoning})
+                              
+owner_data = pd.DataFrame({'owner_ID': owner_ID,
+                              'owner_pID': owner_pID,
+                              'owner_name': owner_name,
+                              'owner_nameSecondary': owner_nameSecondary,
+                              'owner_addrDeliveryLine': owner_addrDeliveryLine,
+                              'owner_addrUnitDesignator': owner_addrUnitDesignator,
+                              'owner_addrCity': owner_addrCity,
+                              'owner_addrZip': owner_addrZip,
+                              'owner_addrState': owner_addrState,
+                              'owner_addrCountry': owner_addrCountry,
+                              'owner_addrInternational': owner_addrInternational
+                              }
+                              )
+                          
+deed_data = pd.DataFrame({'deed_pID': deeds_pID,
+                          'deed_deedID': deeds_deedID,
+                          'deed_sellerLine':deeds_sellerLine,
+                          'deed_buyerLine':deeds_buyerline,
+                          'deed_deedDt': deeds_deedDt})
+                          
+owner_data.to_csv('austin_owner_data.csv')  
+propertyChar_data.to_csv('austin_propertyChar_data.csv')
+
+situs_data.to_csv('austin_situs_data.csv')
+deed_data.to_csv('austin_deed_data.csv')
+                                     
+```
