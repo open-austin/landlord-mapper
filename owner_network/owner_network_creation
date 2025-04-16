@@ -1,0 +1,91 @@
+---
+title: "Owner Network Analysis"
+output: html_document
+date: "2025-04-04"
+---
+```{r}
+
+owners_info_scraped <- read.csv('owner_data_total.csv')
+
+owners_info_scraped <- na.omit(owners_info_scraped)
+
+situs_owner_strings <- tapply(1:nrow(owners_info_scraped),
+                              owners_info_scraped$situs_pID,
+                              function(index){
+                                unique_owners <- unique(owners_info_scraped$owner_name[index])
+                                
+                                unique_owners <- unique_owners[order(unique_owners)]
+                                unique_owner_string <- paste(unique_owners,
+                                                             collapse = '_')
+                                unique_owner_add <- unique(owners_info_scraped$owner_mail_address[index])
+                                unique_owner_add <- unique_owner_add[order(unique_owner_add)]
+                                unique_owner_add_string <- paste(unique_owner_add,
+                                                          collapse = '_')
+                                corp_name <- unique(owners_info_scraped$corp_business_name[index])
+                                registered_agent <- unique(owners_info_scraped$corp_registered_agent_name[index])
+                                registered_agent <- paste(registered_agent,
+                                                          collapse = '_')
+                                registered_agent_add <- unique(owners_info_scraped$corp_registered_agent_mail_address[index])
+                                registered_agent_add <-paste(registered_agent_add,
+                                                             collapse = '_')
+                                
+                                result <- paste(unique_owner_string,
+                                      unique_owner_add_string,
+                                      corp_name,
+                                      registered_agent,
+                                      registered_agent_add,
+                                      sep = ' ')
+                                result
+                              })
+
+
+```
+
+
+```{r}
+situs_owner_trigram_dist_matrix <- as.matrix(stringdist::stringdistmatrix(situs_owner_strings,
+                                                                q = 4,
+                                                                method = 'cosine'))
+
+situs_owner_trigram_dist_matrix <- 1 - situs_owner_trigram_dist_matrix
+
+
+
+```
+
+
+situs_owner_sbm_model <-sbm::estimateSimpleSBM(situs_owner_trigram_dist_matrix,
+                                               directed = FALSE,
+                                               model = 'gaussian',
+                                               estimOptions = list(plot=FALSE)
+                                               )
+
+readr::write_rds(situs_owner_sbm_model,
+                 'situs_owner_sbm_model_quadgram.rds')
+
+
+
+
+```{r}
+
+situs_neighbors <- apply(situs_owner_trigram_dist_matrix,
+                         1,
+                         function(x){which(x>0.6)})
+
+matched_owners_inds_uniq<-unique(lapply(situs_neighbors,
+                        function(inds){
+                          # print(inds)
+                          result <-unique(as.numeric(  
+                          unlist(sapply(inds,
+                            function(ind){
+                              
+                              situs_neighbors[[ind]]
+                              }))
+                          ))
+                          result = union(result,inds)
+                          result <- result[order(result)]
+                          
+                          result
+                          }))
+```
+
