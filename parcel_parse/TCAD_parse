@@ -10,8 +10,11 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r}
 library(reticulate)
-# reticulate::conda_list()
-reticulate::virtualenv_create('r-reticulate')
+reticulate::virtualenv_list()
+reticulate::virtualenv_create('r-reticulate', packages = c('numpy',
+                                                         'pandas',
+                                                         'ijson'),
+                              force = FALSE)
 ```
 
 ```{python}
@@ -23,6 +26,7 @@ import re
 import ijson
 import multiprocessing
 from multiprocessing import Pool
+situs_year = list()
 situs_pID = list()
 situs_streetNum = list()
 situs_streetPrefix = list()
@@ -33,6 +37,7 @@ situs_state = list()
 situs_zip = list()
 situs_country = list()
 situs_international = list()
+owner_year = list()
 owner_ID = list()
 owner_name = list()
 owner_nameSecondary = list()
@@ -43,18 +48,44 @@ owner_addrZip = list()
 owner_addrState = list()
 owner_addrCountry = list()
 owner_addrInternational = list()
+owner_ownerPct = list()
+owner_exemptions = list()
 owner_pID = list()
+propertyChar_year =list()
+
 propertyChar_marketArea = list()
 propertyChar_region = list()
 propertyChar_zoning = list()
 propertyChar_pID = list()
-prefix_list = list()
 
-counter = 0
-TCAD_special_export_file_name = '2024 Special export Supp 9 02052025.zip'
-parcel_file_name = 'Travis-protaxExport-20250206.json'
+pID_list = list()
+year_list = list()
+situs_coord = list()
 
+deeds_deedDt=list()
+deeds_pID=list()
+deeds_deedID=list()
+deeds_sellerLine=list()
+deeds_buyerline=list()
+deeds_deedDt=list()
+deeds_year = list()
 
+propertyProf_year = list()
+propertyProf_pID = list()
+propertyProf_AirHeat = list()
+
+propertyProf_imprvStateCd = list()
+propertyProf_imprvTotalArea = list()
+propertyProf_landStateCd = list()
+propertyProf_landTotalLots = list()
+propertyProf_landTotalSqft = list()
+propertyProf_imprvStories = list()
+propertyProf_imprvUnits = list()
+propertyProf_imprvActualYearBuilt = list()
+propertyProf_imprvEffYearBuilt = list()
+propertyProf_fieldInsDt = list()
+propertyProf_landHomesitePct = list()
+propertyProf_mobileHomeNumbers = list()
 ```
 
 
@@ -86,24 +117,80 @@ def propChar_add(key, value):
     else:
               
       propertyChar_zoning.append(value)
+  
 
 
-with zipfile.ZipFile(TCAD_special_export_file_name,'r') as austin_parcel_data_zip:
-  with austin_parcel_data_zip.open(parcel_file_name) as austin_parcel_data:
-    
-    parser = ijson.parse(austin_parcel_data)
-    for prefix, event, value in parser:
-      
-      if prefix.endswith('.propertyCharacteristics.item'):
-        propChars = ijson.kvitems(parser, 'item.propertyCharacteristics.item')
-        for key, value in propChars:
-          propChar_add(key,value)
-    # if __name__ == '__main__':
-    #   with Pool(multiprocessing.cpu_count()-1) as p:
-    #     p.map(propChar_add, propChars)
-```
+def propProf_add(key,value):
+  if(key=='pID'):
+    if(value is None):
+      propertyProf_pID.append('NA')
+    else:
+      propertyProf_pID.append(value)
+  if(key=='centralAirHeat'):
+    if(value is None):
+      propertyProf_AirHeat.append('NA')
+    else:
+      propertyProf_AirHeat.append(value)
+  if(key=='imprvStateCd'):
+    if(value is None):
+      propertyProf_imprvStateCd.append('NA')
+    else:
+      propertyProf_imprvStateCd.append(value)
 
-```{python}
+  if(key=='imprvTotalArea'):
+    if(value is None):
+      propertyProf_imprvTotalArea.append('NA')
+    else:
+      propertyProf_imprvTotalArea.append(value)
+
+  if(key=='imprvStories'):
+    if(value is None):
+      propertyProf_imprvStories.append('NA')
+    else:
+      propertyProf_imprvStories.append(value)
+  if(key=='imprvUnits'):
+    if(value is None):
+      propertyProf_imprvUnits.append('NA')
+    else:
+      propertyProf_imprvUnits.append(value)
+  if(key=='imprvActualYearBuilt'):
+    if(value is None):
+      propertyProf_imprvActualYearBuilt.append('NA')
+    else:
+      propertyProf_imprvActualYearBuilt.append(value)
+  if(key=='imprvEffYearBuilt'):
+    if(value is None):
+      propertyProf_imprvEffYearBuilt.append('NA')
+    else:
+      propertyProf_imprvEffYearBuilt.append(value)
+  if(key=='landHomesitePct'):
+    if(value is None):
+      propertyProf_landHomesitePct.append('NA')
+    else:
+      propertyProf_landHomesitePct.append(value)
+  if(key=='landStateCd'):
+    if(value is None):
+      propertyProf_landStateCd.append('NA')
+    else:
+      propertyProf_landStateCd.append(value)
+  if(key=='landTotalLots'):
+    if(value is None):
+      propertyProf_landTotalLots.append('NA')
+    else:
+      propertyProf_landTotalLots.append(value)
+  if(key=='landTotalSqft'):
+    if(value is None):
+      propertyProf_landTotalSqft.append('NA')
+    else:
+      propertyProf_landTotalSqft.append(value)
+
+  if(key=='mobileHomeNumbers'):
+    if(value is None):
+      propertyProf_mobileHomeNumbers.append('NA')
+    else:
+      propertyProf_mobileHomeNumbers.append(value)
+  
+  
 def situsChar_add(key,value):
   if(key=='pID'):
     if(value is None):
@@ -155,22 +242,9 @@ def situsChar_add(key,value):
       situs_international.append('NA')
     else:
       situs_international.append(value)
-              
-              
-with zipfile.ZipFile(TCAD_special_export_file_name,'r') as austin_parcel_data_zip:
-  with austin_parcel_data_zip.open(parcel_file_name) as austin_parcel_data:
-    parser = ijson.parse(austin_parcel_data)
-    for prefix, event, value in parser:
-      
-      if prefix.endswith('item.situses.item'):
-        situsChars = ijson.kvitems(parser, prefix)
-
-        for key, value in situsChars:
-          situsChar_add(key, value)
-        
-
-
-def ownerChar_add(x):
+    
+   
+def ownerChar_add(key,value):
   if(key=='ownerID'):
     if(value is None):
       owner_ID.append('NA')
@@ -181,6 +255,11 @@ def ownerChar_add(x):
       owner_pID.append('NA')
     else:
       owner_pID.append(value)
+  if(key=='ownerPct'):
+    if(value is None):
+      owner_ownerPct.append('NA')
+    else:
+      owner_ownerPct.append(value)
   if(key=='name'):
     if(value is None):
       owner_name.append('NA')
@@ -226,29 +305,12 @@ def ownerChar_add(x):
       owner_addrInternational.append('NA')
     else:
       owner_addrInternational.append(value)
-
-with zipfile.ZipFile(TCAD_special_export_file_name,'r') as austin_parcel_data_zip:
-  with austin_parcel_data_zip.open(parcel_file_name) as austin_parcel_data:
-    parser = ijson.parse(austin_parcel_data)
-    for prefix, event, value in parser:
-      if prefix.endswith('.owners'):
-        ownerChars = ijson.kvitems(parser, prefix)
-
-        for key, value in ownerChars:
-          ownerChar_add(key, value)
-    
-
-```
-
-
-```{python}
-deeds_deedDt=list()
-deeds_pID=list()
-deeds_deedID=list()
-deeds_sellerLine=list()
-
-deeds_buyerline=list()
-deeds_deedDt=list()
+  if(key=='exemptions'):
+    if(value is None):
+      owner_exemptions.append('NA')
+    else:
+      owner_exemptions.append(value)
+  
 
 def deedChar_add(key,value):
   if(key=='pID'):
@@ -277,27 +339,109 @@ def deedChar_add(key,value):
     else:
       deeds_deedID.append(value)
           
-counter=0
-  
-with zipfile.ZipFile(TCAD_special_export_file_name,'r') as austin_parcel_data_zip:
-  with austin_parcel_data_zip.open(parcel_file_name) as austin_parcel_data:
-    parser = ijson.parse(austin_parcel_data)
 
-    deedChars = ijson.kvitems(parser, 'item.deeds.item')
-    # if __name__ == '__main__':
-    #   with Pool(multiprocessing.cpu_count()-1) as p:
-    #     p.map(deedChar_add, deedChars))
-    for key, value in deedChars:
-      deedChar_add(key, value)
+
+
       
-        
-          
-          
+print((multiprocessing.cpu_count()-1)//2)
+
 ```
 
 
+
+
+
 ```{python}
-situs_data =pd.DataFrame({'situs_pID': situs_pID,
+from functools import partial
+for year in range(2024,2025):
+
+  print(year)
+  year_used = year
+  TCAD_special_export_file_name = str(year_used)+'_Special_export.zip'
+  base_path = "tcad_data//"
+  
+  with zipfile.ZipFile(base_path+TCAD_special_export_file_name,'r') as austin_parcel_data_zip:
+    parcel_file_name = austin_parcel_data_zip.namelist()[0]
+    print('profile')
+    with austin_parcel_data_zip.open(parcel_file_name) as austin_parcel_data:
+      parser = ijson.parse(austin_parcel_data)
+      propProf = ijson.kvitems(parser, 'item.propertyProfile.item')
+      propProfLen = len(tuple(propProf))//13
+      for key, value in propProf:
+        propProf_add(key,value)
+  with zipfile.ZipFile(base_path+TCAD_special_export_file_name,'r') as austin_parcel_data_zip:
+    parcel_file_name = austin_parcel_data_zip.namelist()[0]
+    print('propChar')
+    with austin_parcel_data_zip.open(parcel_file_name) as austin_parcel_data:
+      parser = ijson.parse(austin_parcel_data)
+      propChar = ijson.kvitems(parser, 'item.propertyCharacteristics.item')
+      propCharLen = len(tuple(propChar))//3
+      for key, value in propProf:
+        propProf_add(key,value)
+
+  with zipfile.ZipFile(base_path+TCAD_special_export_file_name,'r') as austin_parcel_data_zip:
+    parcel_file_name = austin_parcel_data_zip.namelist()[0]
+    print('situs')
+    with austin_parcel_data_zip.open(parcel_file_name) as austin_parcel_data:
+      parser = ijson.parse(austin_parcel_data)
+      situsChars = ijson.kvitems(parser, 'item.situses.item')
+      situsCharsLen = len(tuple(situsChars))//10
+      for key, value in situsChars:
+        situsChar_add(key, value)
+  with zipfile.ZipFile(base_path+TCAD_special_export_file_name,'r') as austin_parcel_data_zip:
+    parcel_file_name = austin_parcel_data_zip.namelist()[0]
+    print('owner')
+    with austin_parcel_data_zip.open(parcel_file_name) as austin_parcel_data:
+      parser = ijson.parse(austin_parcel_data)
+      ownerChars = ijson.kvitems(parser, 'item.owners.item')
+      ownerCharsLen = len(tuple(ownerChars))//13
+      for key, value in ownerChars:
+        ownerChar_add(key, value)
+  
+
+  owner_year.append(np.repeat(str(year),ownerCharsLen,axis=0))
+  situs_year.append(np.repeat(str(year),situsCharsLen,axis=0))
+  propertyProf_year.append(np.repeat(str(year),propProfLen,axis=0))
+  propertyChar_year.append(np.repeat(str(year),propCharLen,axis=0))
+
+```
+
+
+
+```{r}
+
+propertyChar_data = pd.DataFrame({'propertyChar_year':propertyChar_year,
+                                  'propertyChar_pID':propertyChar_pID,
+                                  'propertyChar_marketArea': propertyChar_marketArea,
+                              'propertyChar_region': propertyChar_region,
+                              'propertyChar_zoning': propertyChar_zoning})
+
+propertyChar_data.to_csv('austin_propertyChar_data.csv')
+
+
+propertyProf_data = pd.DataFrame({'propertyProf_year':propertyProf_year,
+                                  'propertyProf_pID':propertyProf_pID,
+                                  'propertyProf_AirHeat': propertyProf_AirHeat,
+                              'propertyProf_imprvStateCd': propertyProf_imprvStateCd,
+                              'propertyProf_imprvTotalArea': propertyProf_imprvTotalArea,
+                              'propertyProf_landStateCd':propertyProf_landStateCd,
+                              'propertyProf_landTotalLots':propertyProf_landTotalLots,
+                              'propertyProf_landTotalSqft':propertyProf_landTotalSqft,
+                              'propertyProf_imprvStories':propertyProf_imprvStories,
+                              'propertyProf_imprvUnits':propertyProf_imprvUnits,
+                              'propertyProf_imprvActualYearBuilt':propertyProf_imprvActualYearBuilt,
+                              'propertyProf_imprvEffYearBuilt':propertyProf_imprvEffYearBuilt,
+                              'propertyProf_landHomesitePct':propertyProf_landHomesitePct,
+                              'propertyProf_mobileHomeNumbers':propertyProf_mobileHomeNumbers})
+
+propertyProf_data.to_csv('austin_propertyProf_data.csv')
+```
+
+
+
+```{python}
+situs_data =     pd.DataFrame({'situs_year':situs_year,
+                              'situs_pID': situs_pID,
                               'situs_streetNum': situs_streetNum,
                               'situs_streetPrefix': situs_streetPrefix,
                               'situs_streetName': situs_streetName,
@@ -307,13 +451,11 @@ situs_data =pd.DataFrame({'situs_pID': situs_pID,
                               'situs_zip': situs_zip,
                               'situs_country': situs_country,
                               'situs_international': situs_international})
+    
+situs_data.to_csv('austin_situs_data.csv')
                               
-propertyChar_data = pd.DataFrame({'propertyChar_pID':propertyChar_pID,
-                                  'propertyChar_marketArea': propertyChar_marketArea,
-                              'propertyChar_region': propertyChar_region,
-                              'propertyChar_zoning': propertyChar_zoning})
-                              
-owner_data = pd.DataFrame({'owner_ID': owner_ID,
+owner_data =  pd.DataFrame({'owner_year':owner_year,
+                          'owner_ID': owner_ID,
                               'owner_pID': owner_pID,
                               'owner_name': owner_name,
                               'owner_nameSecondary': owner_nameSecondary,
@@ -327,16 +469,44 @@ owner_data = pd.DataFrame({'owner_ID': owner_ID,
                               }
                               )
                           
-deed_data = pd.DataFrame({'deed_pID': deeds_pID,
-                          'deed_deedID': deeds_deedID,
-                          'deed_sellerLine':deeds_sellerLine,
-                          'deed_buyerLine':deeds_buyerline,
-                          'deed_deedDt': deeds_deedDt})
-                          
-owner_data.to_csv('austin_owner_data.csv')  
-propertyChar_data.to_csv('austin_propertyChar_data.csv')
+owner_data.to_csv('austin_owner_data.csv')
 
-situs_data.to_csv('austin_situs_data.csv')
-deed_data.to_csv('austin_deed_data.csv')
-                                     
+
+```
+
+
+# with Pool((multiprocessing.cpu_count())//2) as p:
+      #   p.imap(propProf_add, propProf, chunksize = 500)
+      #   p.close()
+      #   p.join()
+
+```{python}
+
+
+# download.file('https://traviscad.org//wp-content/largefiles/2024%20Special%20export%20Supp%205%2011072024.zip', destfile = getwd())
+# tcad_parcel_data <- jsonlite::read_json(file('Travis-protaxExport-20241107.json'))
+# tcad_parcel_data <- arrow::open_dataset('Travis-protaxExport-20241107.json',
+#                                         delimiter = ',',
+#                                         format = 'json')
+
+
+
+```
+
+pID
+geometry
+```{r}
+base_path = "D://austin_parcel_analysis//tcad_data//"
+TCAD_special_export_file_name = paste(2012,
+                                      '_Special_export.zip',sep='')
+# readLines('tacd_data//2012_Special_export.zip', n=1000)
+tail(readLines(unz(paste(base_path,
+                    TCAD_special_export_file_name,
+                    sep = '//'),
+              "Travis-protaxExport-20250311.json"), n=2000),1000)
+ # read.table(unz("Sales.zip", "Sales.dat"), nrows=10, 
+# read.table("Sales.zip", nrows=10, header=T, quote="\"", sep=",")
+
+
+# read_csv("foo.txt.gz")
 ```
