@@ -55,7 +55,9 @@ financial_markers_supp <- c('MORTG',
                        'CONDO',
                        'C/O',
                        '[[:digit:]]',
-                       'BORROWER')
+                       'BORROWER',
+                       'FOUNDA'
+                       )
 
 financial_marker_string <- paste(paste(financial_markers_base, 
                                        collapse = '|'),
@@ -78,9 +80,7 @@ library(selenium)
 # library(chromote)
 
 library(readr)
-# user_agent = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/60.0.3112.50 Safari/537.36'
 
-#Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36
 target_properties <- read_csv('target_properties.csv')
 target_properties[,grepl('^X',
                          colnames(target_properties)
@@ -128,6 +128,15 @@ get_business_details = function(business_string){
                             regexpr("(?<=Registered Agent Name:\\n).*(?=\\n)",
                                     business_string, perl = TRUE))
   
+  reg_agent_add_line_1 <- regmatches(business_string,
+                            regexpr("(?<=Office Street Address:\\n).*(?=\\n)",
+                                    business_string, perl = TRUE))
+  reg_agent_add_line_2 <- regmatches(business_string,
+                            regexpr("(?<=\\n).*(?=$)",
+                                    business_string, perl = TRUE))
+  registered_agent_mail_add <- paste(reg_agent_add_line_1,
+                                     reg_agent_add_line_2,
+                                     sep = ', ')
   business_details_table = data.frame(corp_business_name = business_name,
               corp_TTN = ttn_matches,
              corp_mail_address = mail_add_matches,
@@ -136,7 +145,8 @@ get_business_details = function(business_string){
              corp_sos_registration_status = sos_registration_status,
              corp_effective_sos_registration_date = effective_sos_reg_date,
              corp_tx_sos_file_num = tx_sos_file_num,
-             corp_registered_agent_name = registered_agent_name)
+             corp_registered_agent_name = registered_agent_name,
+             corp_registered_agent_add = registered_agent_mail_add)
   
   return(business_details_table)
 }
@@ -147,11 +157,10 @@ type_name = function(entity_name_search_box,
                      try = 1
                      ){
   if(try==1){
-    print('1')
     elem_set_value(entity_name_search_box,
                  trimws(gsub(paste(',?[[:space:]]{1}(?=',
                                     financial_marker_base_string,
-                                    ')', sep = ''),
+                                    '.*)', sep = ''),
                              ', ',
                              name,
                              perl = TRUE)
@@ -159,11 +168,11 @@ type_name = function(entity_name_search_box,
                  )
   }
   if(try==2){
-    print('2')
+
     elem_set_value(entity_name_search_box,
                  trimws(gsub(paste(',?[[:space:]]{1}(?=',
                                     financial_marker_base_string,
-                                    ')', sep = ''),
+                                    '.*)', sep = ''),
                              ' ',
                              name,
                              perl = TRUE)
@@ -172,7 +181,7 @@ type_name = function(entity_name_search_box,
     
   }
   if(try==3){
-    print('3')
+
     elem_set_value(entity_name_search_box,
                  trimws(gsub(paste(',?[[:space:]]{1}',
                                     financial_marker_base_string,
@@ -188,7 +197,7 @@ type_name = function(entity_name_search_box,
 
 wait_to_click = function(element){
   element %>%
-    elem_expect(is_present && is_visible, 
+    elem_expect(is_present, is_visible, 
                 timeout = 60) %>%
     elem_click()
   
@@ -243,43 +252,49 @@ scrape_owner = function(owner_name,
             owner_name,
             try = 1)
   wait_to_click(search_button)
-  search_result <-  s('.odd') %>% elem_text()
-  if(search_result=="No data available in table"){
+  message('1')
+  search_result <-  s('#resultTable') %>%
+                    elem_expect(is_present, is_visible, 
+                                timeout = 60)  %>% 
+                    elem_text()
+  message('2')
+  if(search_result %in% c("","No data available in table")){
     type_name(entity_name_search_box,
             owner_name,
             try = 2)
    wait_to_click(search_button)
-    search_result <-  s('.odd') %>% elem_text()
+   search_result <-  s('#resultTable') %>% 
+                     elem_expect(is_present, is_visible, 
+                                 timeout = 60) %>%
+                     elem_text()
     
   }
-  if(search_result=="No data available in table"){
+  if(search_result %in% c("","No data available in table")){
     type_name(entity_name_search_box,
             owner_name,
             try = 3)
     wait_to_click(search_button)
-    search_result <-  s('.odd') %>% elem_text()
-    
-  }
-  if(search_result=="No data available in table"){
+    Sys.sleep(1)
+    search_result <-  s('#resultTable') %>%
+                      elem_expect(is_present, is_visible, 
+                                  timeout = 60) %>%
+                      elem_text()
+    }
+  if(search_result %in% c("","No data available in table")){
     return(NULL)
   }
-  link_addend <- s('.odd') %>% 
+  link_addend <- s('#resultTable') %>% 
                  find_element('a') %>%
                  elem_attr('href')
   
   open_url(paste(base_url,
                link_addend,
                sep = ''))
-  owner_titles <- lapply(s('#table') %>%
-                           find_element('tbody') %>% 
-                           find_elements('th'), 
-                         elem_text)
-  owners <- lapply(s('#table') %>% 
-                     find_element('tbody') %>%
-                     find_elements('.left-align'),
-                   elem_text)
+  
   business_string <- s('#content') %>% 
-    elem_text()
+                    elem_expect(is_present, is_visible, 
+                                timeout = 60) %>%
+                    elem_text()
   
  
   business_details_table_parse = get_business_details(business_string)
@@ -293,13 +308,13 @@ scrape_owner = function(owner_name,
                      find_element('tbody') %>%
                      find_elements('.left-align'),
                    elem_text)
-  print(business_details_table_parse)
+  # print(business_details_table_parse)
   if(length(owners)==0){
-    print('1.0')
+    # print('1.0')
     #no results on a recursive owner search
     if(depth>0 ){
       
-      print('1.1')
+      # print('1.1')
       owner_table = data.frame(owner_name = owner_name,
                              owner_title = owner_title,
                              owner_mail_address = owner_address)
@@ -310,7 +325,7 @@ scrape_owner = function(owner_name,
     }
     #no results on base owner search
     if(depth==0 ){
-      print('1.2')
+      # print('1.2')
       owner_table = data.frame(owner_name = NA,
                              owner_title = NA,
                              owner_mail_address = NA)
@@ -321,10 +336,9 @@ scrape_owner = function(owner_name,
     }
     
   }
-  
   #found results
   else{
-    print('officer')
+    # print('officer')
     owner_name_parse <- unlist(lapply(owners, 
                                function(owner){
                                  regmatches(owner,
@@ -345,7 +359,7 @@ scrape_owner = function(owner_name,
                           owner_name_parse)
     #if owner has financial markers, do a recursive search on it
     if(sum(finance_inds)>0){
-      print('2.1')
+      # print('2.1')
       owners_fin = foreach(ind = which(finance_inds),
                         .combine = 'rbind') %do% {
                           fin_owner_scrape = tryCatch({
@@ -376,7 +390,7 @@ scrape_owner = function(owner_name,
                         }
       
       if(sum(!finance_inds)>0){
-        print('2.2')
+        # print('2.2')
         owners_non_fin = data.frame(owner_name = owner_name_parse,
                              owner_title = owner_title_parse,
                              owner_address = owner_address_parse)[!finance_inds,]
@@ -389,12 +403,12 @@ scrape_owner = function(owner_name,
                                      owners_non_fin))
       }
       else{
-        print('2.3')
+        # print('2.3')
         results = data.frame(owners_fin)
       }
     }
     else{
-      print('3')
+      # print('3')
       owner_table = data.frame(owner_name = owner_name_parse,
                              owner_title = owner_title_parse,
                              owner_mail_address = owner_address_parse)
@@ -417,9 +431,6 @@ scrape_owner = function(owner_name,
 
 ```
 
-cpa_session %>%
-    html_element("div#wrapper") %>%
-    html_element("div#content") %>% html_element("form") %>% html_element("div") %>% html_element("div.panel panel-primary")
 ```{r,cache=TRUE, cache.extra=file.mtime("owner_data.csv")}
 
 library(doRNG)
@@ -439,27 +450,29 @@ colnames_used <- c('owner_name',
                    'corp_effective_sos_registration_date',
                    'corp_tx_sos_file_num',
                    'corp_registered_agent_name',
+                   'corp_registered_agent_mail_add',
                    'situs_pID',
                    'situs_address',
                    'veneer_owner',
                    
                    'veneer_owner_mail_address')
 # owner_data_netwo
-owner_data <- read.csv('owner_data.csv')
-empty_owner_ind <- tapply(owner_data$owner_name, owner_data$situs_pID,
-                          function(x){(length(unique(x))==1)&&('' %in% x)})
-empty_pIDs <-names(empty_owner_ind[which(empty_owner_ind)])
-second_run_index <- which(target_properties$situs_pID %in% as.numeric(empty_pIDs))
+owner_data <- read.csv('owner_data_total.csv')
+# empty_owner_ind <- tapply(owner_data$corp_business_name, owner_data$situs_pID,
+#                           function(x){(length(unique(x))==1)&&('' %in% x)})
+# empty_pIDs <-names(empty_owner_ind[which(empty_owner_ind)])
+# second_run_index <- which(target_properties$situs_pID %in% as.numeric(empty_pIDs))
 
-insist_scape_owner = purrr:::insistently(scrape_owner,
+insist_scrape_owner = purrr:::insistently(scrape_owner,
                                         rate = rate_backoff(pause_base = 5,
-                                                            pause_cap = 80,
+                                                            pause_cap = 90,
                                                             pause_min = 1,
-                                                            max_times = 5,
+                                                            max_times = 3,
                                                             jitter = TRUE
 ))
-owner_data <- foreach(index =second_run_index,
-                      .combine = 'rbind',
+
+#
+owner_data <- foreach(index =length(unique(owner_data$situs_pID)):nrow(target_properties),
                       .options.RNG = 8989,
                       .export = financial_marker_string) %dorng% {
                         owner_name =target_properties$owner_name[index]
@@ -468,7 +481,7 @@ owner_data <- foreach(index =second_run_index,
                         situs_address = target_properties$situs_address[index]
                         message(index)
                         message(owner_name)
-                        property_owner_info <- tryCatch({insist_scape_owner(owner_name, 
+                        property_owner_info <- tryCatch({insist_scrape_owner(owner_name, 
                                      situs_pID = situs_pID , 
                                      situs_address = situs_address,
                                      veneer_owner = owner_name,
@@ -478,31 +491,30 @@ owner_data <- foreach(index =second_run_index,
                                  )
                         if((is.null(property_owner_info)) |
                            ('error' %in% class(property_owner_info))){
-                          property_owner_info <- data.frame(t(c(rep(NA, 12),
+                          property_owner_info <- data.frame(t(c(rep(NA, 13),
                                    situs_pID,
                                    situs_address,
                                    owner_name,
                                    
                                    owner_address)))
                         }
-                        
+                        print(property_owner_info)
                         first_prop <- index!=1
                         colnames(property_owner_info) <- colnames_used
                         
                         data.table::fwrite(property_owner_info,
 
-                                    'owner_data.csv',
+                                    'owner_data_total.csv',
                                     append = first_prop,
                                     sep = ','
                                     )
                         print(property_owner_info)
                         print(dim(property_owner_info))
                         return(property_owner_info)
-                      }
-
+                      } 
 
 print(Sys.time())
 
-# write.csv(owner_data,'owner_data_total.csv')
+write.csv(owner_data,'owner_data_total.csv')
 
 ```
