@@ -1,0 +1,373 @@
+---
+title: "tcad_parcel_analysis"
+output: html_document
+date: "2024-12-04"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+
+print(Sys.time())
+owner_data <- read.csv('austin_owner_data.csv', 
+                       row.names = 'X')
+propertyChar_data <- read.csv('austin_propertyChar_data.csv',
+                              row.names = 'X')
+propertyProf_data <- read.csv('austin_propertyProf_data.csv',
+                              row.names = 'X')
+situs_data <- read.csv('austin_situs_data.csv',
+                       row.names = 'X')
+# deed_data <- read.csv('austin_deed_data.csv')
+```
+
+
+```{r}
+library(dplyr)
+austin_parcel_data_merged <- left_join(situs_data,
+                                       propertyChar_data,
+                                       by = c("situs_pID"="propertyChar_pID",
+                                              'situs_year'='propertyChar_year')
+                                       ) %>%
+                              left_join(owner_data,
+                                        by = c('situs_pID'='owner_pID',
+                                               'situs_year'='owner_year')
+                                        ) %>%
+                              left_join(propertyProf_data,
+                                        by = c('situs_pID'='propertyProf_pID',
+                                               'situs_year'='propertyProf_year')
+                                        )
+# write.csv(austin_parcel_data_merged,'austin_parcel_data_merged.csv')
+```
+
+```{r}
+
+
+austin_parcel_data_merged$situs_city[is.na(austin_parcel_data_merged$situs_city)] <-'AUSTIN'
+# austin_parcel_data_merged$situs_streetNum[is.na(austin_parcel_data_merged$situs_streetNum)] <-''
+# 
+# austin_parcel_data_merged$situs_streetPrefix[is.na(austin_parcel_data_merged$situs_streetPrefix)] <-''
+
+austin_parcel_data_merged$situs_zip <- sapply(austin_parcel_data_merged$situs_zip,
+                                              function(zip){unlist(strsplit(zip, split = '-'))[1]})
+austin_parcel_data_merged$situs_country[is.na(austin_parcel_data_merged$situs_country)|
+                                          austin_parcel_data_merged$situs_country==""] <-'USA'
+
+austin_parcel_data_merged$situs_international[is.na(austin_parcel_data_merged$situs_international) |austin_parcel_data_merged$situs_international==""| grepl(0, austin_parcel_data_merged$situs_international)] <-'DOMESTIC'
+
+austin_parcel_data_merged$situs_address <- paste(austin_parcel_data_merged$situs_streetNum,
+                                                 austin_parcel_data_merged$situs_streetPrefix,
+                                                 austin_parcel_data_merged$situs_streetName,
+                                                 austin_parcel_data_merged$situs_streetSuffix,
+                                                 austin_parcel_data_merged$situs_city,
+                                                 austin_parcel_data_merged$situs_state,
+                                                 austin_parcel_data_merged$situs_zip)
+
+address_clean = function(data = austin_parcel_data_merged,
+                         col = 'situs_address'){
+  data_used <- data[,col]
+  data_used = gsub('SUITE|STE|CONDO|UNIT|APT|BLDG|[[:punct:]]',
+                    '', 
+                    data_used)
+  data_used <- gsub('[[:space:]]+NA[[:space:]]+|[[:space:]]+NO[[:space:]]+',
+                     ' ',
+                     data_used)
+  data_used <- gsub('^NA*[[:space:]]+|[[:space:]]+NA*$',
+                     '',
+                     data_used)
+  data_used <- gsub('[[:space:]]{2,}',
+                     ' ',
+                     data_used)
+  data_used <-sapply(data_used,
+                      function(address){
+               regex_used <- '[[:digit:]]+TH|[[:digit:]]+RD|[[:digit:]]+ND'
+               start_ind <- regexpr(regex_used, address)
+              
+               if(start_ind<0){
+                 return(address)
+               }
+               gsub(regex_used,
+                    substr(address,(start_ind),(start_ind+attr(start_ind,
+                                                               'match.length')-3
+                                                )
+                           ),
+                    address)
+               }
+             )
+  data_used <- gsub('RANCH ROAD',
+                     'RR',
+                     data_used)
+  data_used <- gsub('DRIVE',
+                     'DR',
+                     data_used)
+  data_used<- gsub('INTERSTATE',
+                    'IH',
+                    data_used)
+  data_used<- gsub('LANE',
+                    'LN',
+                    data_used)
+  data_used<- gsub('ROAD',
+                    'RD',
+                    data_used)
+  data_used <- gsub('TRAIL',
+                     'TRL',
+                     data_used)
+  data_used <- gsub('STREET',
+                     'ST',
+                     data_used)
+  data_used <- gsub('FREEWAY',
+                     'FRWY',
+                     data_used)
+  data_used <- gsub('BLUFF',
+                     'BLF',
+                     data_used)
+  data_used<- gsub('FLOOR',
+                    'FL',
+                    data_used)
+  data_used <- gsub('PLAZA',
+                     'PLZ',
+                     data_used)
+  data_used <- gsub('AVENUE',
+                     'AVE',
+                     data_used)
+  data_used <- gsub('CIRCLE',
+                     'CIR',  
+                     data_used)
+  data_used <- gsub('LANE',
+                     'LN',
+                     data_used)
+  data_used <- gsub('PARKWAY',
+                     'PKWY',
+                     data_used)
+  data_used <- gsub('WAY',
+                     'WY',
+                     data_used)
+  data_used <- gsub('COURT',
+                     'CT',
+                     data_used)
+  data_used <- gsub('COVE',
+                     'CV',
+                     data_used)
+  data_used <- gsub('PLACE',
+                     'PL',
+                     data_used)
+  data_used <- gsub('POINT',
+                     'PT',
+                     data_used)
+  data_used <- gsub('HL',
+                     'HILL',
+                     data_used)
+  data_used <- gsub('SPGS',
+                     'SPRINGS',
+                     data_used)
+  data_used <- gsub('BOULEVARD',
+                     'BLVD',
+                     data_used)
+  data_used <- gsub('MOUNTAIN',
+                     'MTN',
+                     data_used)
+  data_used <- gsub('NORTH',
+                     'N',
+                     data_used)
+  data_used <- gsub('WEST',
+                     'W',                   
+                     data_used)
+  data_used <- gsub('SOUTH',
+                     'S',
+                     data_used)
+  data_used <- gsub('EAST',
+                     'E',
+                     data_used)
+  return(data_used)
+
+}
+
+austin_parcel_data_merged$situs_address <- address_clean(austin_parcel_data_merged,
+                                                         'situs_address')
+
+```
+
+
+```{r}
+
+
+austin_parcel_data_merged$owner_addrCountry[is.na(austin_parcel_data_merged$owner_addrCountry)|
+                                              grepl('US',austin_parcel_data_merged$owner_addrCountry)|
+                                          austin_parcel_data_merged$owner_addrCountry==""] <-'USA'
+
+austin_parcel_data_merged$owner_addrInternational[is.na(austin_parcel_data_merged$owner_addrInternational)|austin_parcel_data_merged$owner_addrInternational=="" | grepl(0, austin_parcel_data_merged$owner_addrInternational)]  <- 'DOMESTIC'
+
+austin_parcel_data_merged$owner_addrZip <- sapply(austin_parcel_data_merged$owner_addrZip,
+                                              function(zip){unlist(strsplit(zip, split = '-'))[1]})
+
+austin_parcel_data_merged$owner_address <- paste(austin_parcel_data_merged$owner_addrDeliveryLine,
+      austin_parcel_data_merged$owner_addrUnitDesignator,
+      austin_parcel_data_merged$owner_addrCity,
+      austin_parcel_data_merged$owner_addrState,
+      austin_parcel_data_merged$owner_addrZip)
+
+austin_parcel_data_merged$owner_address <- address_clean(austin_parcel_data_merged,
+                                                         'owner_address')
+
+```
+
+
+```{r}
+
+austin_parcel_data_merged$is_residential <- (grepl('^A|^B',                                                  austin_parcel_data_merged$propertyProf_imprvStateCd)|
+                                               grepl('^A|^B',                                                  austin_parcel_data_merged$propertyProf_landStateCd)|
+                                               grepl('SF|MF',                                                  austin_parcel_data_merged$propertyChar_zoning))
+
+
+austin_parcel_data_merged$is_owner_out_of_state <- as.character(austin_parcel_data_merged$situs_state)!=as.character(austin_parcel_data_merged$owner_addrState)
+austin_parcel_data_merged$is_owner_occupied <- sapply(1:nrow(austin_parcel_data_merged),
+                                                   function(ind){
+                                                     result <-(grepl(
+                                         austin_parcel_data_merged$owner_address[ind],
+                                                     austin_parcel_data_merged$situs_address[ind]
+                                                     )|grepl("'exemptionCode': 'HS'", austin_parcel_data_merged$owner_exemptions[ind]))
+                                                     if(is.na(result)){
+                                                       return(FALSE)
+                                                     }
+                                                     result
+                                                     }
+                                         )
+
+austin_parcel_data_merged$property_units = austin_parcel_data_merged$propertyProf_imprvTotalArea/900
+austin_parcel_data_merged[which((austin_parcel_data_merged$propertyProf_imprvStateCd %in%
+                                  c('A1','A2','A3'))|
+                                  (austin_parcel_data_merged$propertyProf_landStateCd %in%
+                                  c('A1','A2','A3'))
+                                  ) ,'property_units']<- 1
+austin_parcel_data_merged[which((austin_parcel_data_merged$propertyProf_imprvStateCd %in%
+                                  c('B2'))|
+                                  (austin_parcel_data_merged$propertyProf_landStateCd %in%
+                                  c('B2'))) ,'property_units']<- 2
+austin_parcel_data_merged[which((austin_parcel_data_merged$propertyProf_imprvStateCd %in%
+                                  c('B3'))|
+                                  (austin_parcel_data_merged$propertyProf_landStateCd %in%
+                                  c('B3'))) ,'property_units']<- 3
+austin_parcel_data_merged[which((austin_parcel_data_merged$propertyProf_imprvStateCd %in%
+                                  c('B4'))|
+                                  (austin_parcel_data_merged$propertyProf_landStateCd %in%
+                                  c('B4'))) ,'property_units']<- 4
+austin_parcel_data_merged[!which((austin_parcel_data_merged$propertyProf_imprvStateCd %in%
+                                    c('A1','A2','A3','A4','A5',
+                                      'B1','B2','B3','B4','B5')
+                                  )|
+                                  (austin_parcel_data_merged$propertyProf_landStateCd %in%
+                                    c('A1','A2','A3','A4','A5',
+                                      'B1','B2','B3','B4','B5')
+                                  )
+                                 )
+                          ] <- 0
+
+
+```
+
+
+```{r}
+financial_markers <- c('LTD',
+                       'L T D',
+                       'LLC',
+                       'L L C',
+                       'LP',
+                       'L P',
+                       'LLLP',
+                       'L L L P',
+                       'MORTG',
+                       'RENT',
+                       'REAL PROP',
+                       'MARKET',
+                       'INVEST',
+                       'PROP',
+                       'MANAGE',
+                       'MGT',
+                       'ASSET',
+                       'JOINT',
+                       'VENTURE',
+                       'VNT',
+                       'INC',
+                       'I N C',
+                       'LC',
+                       'L C',
+                       'LIMIT',
+                       'PARTN',
+                       'PRTN',
+                       'BANK',
+                       'ASSOC',
+                       'EQUIT',
+                       'REALT',
+                       'OWNER',
+                       'HOLDING',
+                       'DEVELOP',
+                       'COMP',
+                       'CORP',
+                       'AQUISI',
+                       'CONDO',
+                       'C/O',
+                       '[[:digit:]]',
+                       'BORROWER',
+                       'FOUNDA')
+austin_parcel_data_merged$is_financialized <- grepl(paste(financial_markers,
+                                                          collapse = '|'),                                                    paste(austin_parcel_data_merged$owner_name,                                                          austin_parcel_data_merged$owner_nameSecondary)
+                                                    )
+
+```
+
+
+```{r}
+austin_parcel_data_merged$is_target = ((austin_parcel_data_merged$is_owner_occupied==FALSE)|
+  (austin_parcel_data_merged$is_financialized)) &
+  austin_parcel_data_merged$is_residential
+
+austin_parcel_data_merged$is_mom_and_pop = (austin_parcel_data_merged$is_owner_occupied & 
+  austin_parcel_data_merged$is_residential & 
+    (austin_parcel_data_merged$is_financialized==FALSE))
+
+write.csv(austin_parcel_data_merged,
+          'austin_parcel_data_merged.csv')
+print(Sys.time())
+```
+
+```{r}
+
+parcel_high_level_facts <-data.frame(is_financialized=t(as.matrix(summary(austin_parcel_data_merged$is_financialized)))[2:3],
+           is_residential= t(as.matrix(summary(austin_parcel_data_merged$is_residential)))[2:3],
+           
+           is_owner_occupied=t(as.matrix(summary(austin_parcel_data_merged$is_owner_occupied)))[2:3],
+           row.names = c('FALSE','TRUE'
+                         ))
+
+write.csv(parcel_high_level_facts,
+          'parcel_high_level_facts.csv')
+
+target_properties <- dplyr::filter(austin_parcel_data_merged,
+                            is_owner_occupied==FALSE,
+                            is_residential==TRUE,
+                            is_financialized==TRUE)
+
+
+
+write.csv(target_properties,
+          'target_properties.csv')
+
+
+raw_owner_holding_count <-tapply(target_properties$owner_name,
+                             target_properties$owner_name,length)[order(tapply(
+                               target_properties$owner_name,
+                               target_properties$owner_name,length),
+                               decreasing = TRUE)]
+
+
+write.csv(raw_owner_holding_count,
+          'raw_owner_holding_count.csv'
+          )
+```
