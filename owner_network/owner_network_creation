@@ -4,50 +4,99 @@ output: html_document
 date: "2025-04-04"
 ---
 ```{r}
+library(foreach)
 
-owners_info_scraped <- read.csv('owner_data_total.csv')
+owner_data <- read.csv('owner_data_total.csv')
 
-owners_info_scraped <- na.omit(owners_info_scraped)
+owner_data<- owner_data[which(!duplicated(owner_data,fromLast = TRUE)),]
 
-situs_owner_strings <- tapply(1:nrow(owners_info_scraped),
-                              owners_info_scraped$situs_pID,
-                              function(index){
-                                unique_owners <- unique(owners_info_scraped$owner_name[index])
-                                
-                                unique_owners <- unique_owners[order(unique_owners)]
-                                unique_owner_string <- paste(unique_owners,
-                                                             collapse = '_')
-                                unique_owner_add <- unique(owners_info_scraped$owner_mail_address[index])
-                                unique_owner_add <- unique_owner_add[order(unique_owner_add)]
-                                unique_owner_add_string <- paste(unique_owner_add,
-                                                          collapse = '_')
-                                corp_name <- unique(owners_info_scraped$corp_business_name[index])
-                                registered_agent <- unique(owners_info_scraped$corp_registered_agent_name[index])
-                                registered_agent <- paste(registered_agent,
-                                                          collapse = '_')
-                                registered_agent_add <- unique(owners_info_scraped$corp_registered_agent_mail_address[index])
-                                registered_agent_add <-paste(registered_agent_add,
-                                                             collapse = '_')
-                                
-                                result <- paste(unique_owner_string,
-                                      unique_owner_add_string,
-                                      corp_name,
-                                      registered_agent,
-                                      registered_agent_add,
-                                      sep = ' ')
-                                result
-                              })
 
+
+situs_pIDs <- unique(owner_data$situs_pID)
 
 ```
 
 
 ```{r}
-situs_owner_trigram_dist_matrix <- as.matrix(stringdist::stringdistmatrix(situs_owner_strings,
-                                                                q = 4,
-                                                                method = 'cosine'))
+library(doFuture)
 
-situs_owner_trigram_dist_matrix <- 1 - situs_owner_trigram_dist_matrix
+registerDoFuture()
+
+plan(multisession)
+
+
+situs_owner_strings <-foreach(pID = situs_pIDs) %dopar% {
+         data_used <- dplyr::filter(owner_data,
+                                    situs_pID==pID)
+         unique_owners <- unique(data_used$owner_name)
+                                
+         unique_owner_add <- unique(data_used$owner_mail_address)
+         
+         corp_name <- unique(data_used$corp_business_name)
+         
+         
+         corp_address <- unique(data_used$corp_mail_address)
+         registered_agent <- unique(data_used$corp_registered_agent_name)
+         
+         registered_agent_add <-unique(data_used$corp_registered_agent_mail_address)
+        
+         veneer_address <- unique(data_used$veneer_owner_mail_address)
+                                
+         
+         
+         veneer_owner <- unique(data_used$veneer_owner)
+
+         
+         unique_entities <- unique(c(corp_name,
+                                     veneer_owner))
+         
+         unique_entities <- paste(unique_entities[order(unique_entities)],
+                                  collapse = ' ')
+         
+         unique_addresses <- unique(c(unique_owner_add,
+                                    corp_address,
+                                    registered_agent_add,
+                                    veneer_address))
+         unique_addresses <- paste(unique_addresses[order(unique_addresses)],
+                                   collapse = ' ')
+         unique_individuals <- unique(unique_owners,
+                                      registered_agent
+                                      )
+         unique_individuals <- paste(unique_individuals[order(unique_individuals)],
+                                     collapse = ' ')
+                                
+         result <- paste(unique_entities,
+                         unique_addresses,
+                         unique_individuals,
+                         sep = ' ')
+         result[length(result)]
+          
+}
+
+
+situs_owner_strings <- trimws(unlist(situs_owner_strings))
+
+readr::write_rds(situs_owner_strings,
+                 'situs_owner_strings.rds')
+```
+
+
+
+```{r}
+situs_owner_strings <- readRDS('situs_owner_strings.rds')
+situs_owner_cosine_dist_matrix <- as.matrix(stringdist::stringdistmatrix(unlist(situs_owner_strings),
+                                                                q = 2,
+                                                                method = 'cosine',
+                                                                useName = 'strings'))
+```
+
+
+```{r}
+readr::write_rds(situs_owner_cosine_dist_matrix,
+                 "D:\\austin_parcel_analysis\\situs_owner_cosine_dist_matrix_q2.rds",
+                 version = 3,
+                 compress = 'gz')
+situs_owner_cosine_sim_matrix <- 1 - situs_owner_cosine_dist_matrix
 
 
 
@@ -68,24 +117,289 @@ readr::write_rds(situs_owner_sbm_model,
 
 ```{r}
 
-situs_neighbors <- apply(situs_owner_trigram_dist_matrix,
-                         1,
-                         function(x){which(x>0.6)})
+situs_neighbors <- sapply(1:nrow(situs_owner_cosine_sim_matrix),
+                          function(index){
+         unique(c(which(situs_owner_cosine_sim_matrix[index,]>0.9),
+         which(situs_owner_cosine_sim_matrix[,index]>0.9)
+                                     ))
+                          })
+```
 
+```{r}
 matched_owners_inds_uniq<-unique(lapply(situs_neighbors,
                         function(inds){
                           # print(inds)
                           result <-unique(as.numeric(  
                           unlist(sapply(inds,
                             function(ind){
-                              
-                              situs_neighbors[[ind]]
-                              }))
-                          ))
+                              inner_result <-c(ind, situs_neighbors[[ind]])
+                              inner_result <- append(inner_result,
+                                                     sapply(inner_result,
+                                                     function(ind){
+                                                       situs_neighbors[[ind]]
+                                       }))
+                              inner_result
+                              }
+                            )
+                          )))
                           result = union(result,inds)
                           result <- result[order(result)]
                           
                           result
                           }))
+
+readr::write_rds(matched_owners_inds_uniq,
+                 'matched_owners_inds_uniq.rds')
+```
+37, 111, 2308, 4486, 5647, 7102
+
+103443                                   198, 1302
+```{r}
+
+situs_group_assignment <- data.frame(situs_pIDs)
+
+situs_group_assignment$group_assign <- sapply(1:length(situs_pIDs), 
+                                              function(index){
+          which(unlist(lapply(matched_owners_inds_uniq,
+                              function(set){index %in% set})))[[1]]
+         
+       })
+situs_group_assignment$group_assign <- as.numeric(situs_group_assignment[,2])
+q <- sapply(situs_group_assignment$group_assign, length)
+readr::write_rds(situs_group_assignment,
+                 'situs_group_assignment.rds'
+                 )
 ```
 
+
+```{r}
+
+
+owner_data <-dplyr::left_join(owner_data,
+                                       situs_group_assignment,
+                                       by = c('situs_pID'= 'situs_pIDs'))
+write.csv(owner_data,
+          'owner_data_total.csv')
+
+```
+
+```{r}
+
+owner_data <- read.csv('owner_data_total.csv',
+                       row.names = 'X')
+
+unique_situs_addr <- data.frame(situs_addr=unique(owner_data$situs_address))
+
+start_inds <- seq(1,nrow(unique_situs_addr),10000)
+end_inds <-c(seq(10000,nrow(unique_situs_addr),10000),
+             nrow(unique_situs_addr))
+library(foreach)
+inds_used <- list(start = start_inds,end = end_inds)
+library(dplyr)
+library(tidygeocoder)
+owners_info_scraped_coords <- foreach(index = 1:length(inds_used$start),
+                                      .combine = 'rbind') %do% {
+                                        start_ind = inds_used$start[index]
+                                        end_ind = inds_used$end[index]
+            owner_coords <- data.frame(situs_addr = unique_situs_addr[start_ind:end_ind,]) %>%
+              geocode(situs_addr,
+                      full_results = TRUE, 
+                      method = 'census',
+                      api_options = list(census_return_type = 'geographies'))
+            owner_coords
+                                      }
+            
+
+owners_info_scraped_coords$id <- NULL
+
+owners_info_total <- left_join(owner_data,
+                               owners_info_scraped_coords,
+                               by = c('situs_address'='situs_addr'))
+owners_info_total$input_address <- NULL
+owners_info_total$matched_address <- NULL
+
+owners_info_total <- owners_info_total %>% 
+  rename(situs_lat = lat,
+         situs_long = long)
+write.csv(owners_info_total,
+          'owners_info_total.csv'
+          )
+```
+
+# owners_info_total <- read.csv('owners_info_total.csv',
+#                               row.names = 'X')
+
+library(doFuture)
+registerDoFuture()
+plan(multisession)
+owners_info_total <-foreach(pID = unique(owners_info_total$situs_pID),
+          .combine = 'rbind') %do% {
+            data_used <- dplyr::filter(owners_info_total,
+                                       situs_pID==pID)
+            
+            corp_names <- unique(data_used$corp_business_name)
+            
+            if(('' %in% corp_names)){
+              if(length(corp_names)==1){
+                return(data_used[nrow(data_used),])
+              }
+              else{
+                
+                corp_name_ret <- corp_names[which(corp_names!='')]
+                return(dplyr::filter(data_used,
+                                   corp_business_name %in% corp_name_ret))
+              }
+             
+             
+              }
+            else{
+              return(data_used)
+            }
+            
+          }
+write.csv(owners_info_total,
+          'owners_info_total.csv'
+          )
+
+
+
+
+```{r}
+
+
+library(stringdist)
+edge_list_gen = function(names, col = 'owner_name',
+                         data = owners_info_total){
+  foreach(name=names,
+          .combine = 'rbind') %do% {
+                       
+         groups_used <- unique(data[which(data[,col]==name),
+                                    'group_assign'])
+         
+         group_data <- dplyr::filter(data,
+                                     group_assign %in% 
+                                       groups_used)
+         to_names <- unique(group_data[,col]
+                            )
+         to_names <- to_names[order(to_names)]
+         to_names <-  to_names[!grepl('^[[:punct:]]*$',
+                                     to_names)
+                              ]
+         overlap_prop <- sapply(to_names,
+                                function(to){
+                                  sum(tapply(group_data[,col],
+                                             group_data$group_assign,
+                                             
+                                             function(data){
+                                               sum(ain(gsub('[[:punct:]]',
+                                                              '',
+                                                              to),
+                                                         gsub('[[:punct:]]',
+                                                              '',
+                                                              data),
+                                                       method = 'cosine',
+                                                       q=3,
+                                                       maxDist=0.05))>0
+                                               }))/length(groups_used)
+                                  })
+
+         data_used <- data.frame(source = name, 
+                                 target = names(overlap_prop),
+                                 overlap_prop = as.numeric(overlap_prop)
+                                 )
+         
+         
+         
+         data_used
+         
+                                  }
+}
+owner_names <- unique(owners_info_total$owner_name)
+
+owner_names <- owner_names[order(owner_names)]
+
+owner_names <- owner_names[!grepl('^[[:punct:]]*$',
+                                  owner_names)
+                           ]
+owners_info_edge_list <- edge_list_gen(owner_names,
+                                       col = 'owner_name',
+                                       
+                                       data = owners_info_total)
+owners_info_edge_list$group_id <- unlist(sapply(1:nrow(owners_info_edge_list),
+                                      function(index){
+
+                                        source_group <- dplyr::filter(owners_info_total,
+                                                        owner_name==owners_info_edge_list$source[index])$group_assign
+                                        target_group <- dplyr::filter(owners_info_total,
+                                                        owner_name==owners_info_edge_list$target[index])$group_assign
+
+
+                                        paste(as.numeric(intersect(source_group,
+                                                  target_group)),
+                                              collapse = ' ')
+
+                                      }))
+write.csv(owners_info_edge_list,
+          'owners_info_edge_list.csv'
+          )
+
+
+```
+
+
+```{r}
+library(igraph)
+corp_names <- unique(owners_info_total$corp_business_name)
+
+
+corp_names <- corp_names[order(corp_names)]
+
+corp_names <- corp_names[!grepl('^[[:punct:]]*$',
+                                  corp_names)
+                           ]
+
+corp_info_edge_list <- edge_list_gen(corp_names,
+                                     'corp_business_name',
+                                     data = owners_info_total)
+
+corp_info_edge_list$group_id <- sapply(1:nrow(corp_info_edge_list),
+                                      function(index){
+
+                                        source_group <- dplyr::filter(owners_info_total,
+                                                        corp_business_name==corp_info_edge_list$source[index])$group_assign
+                                        target_group <- dplyr::filter(owners_info_total,
+                                                        corp_business_name==corp_info_edge_list$target[index])$group_assign
+
+
+                                        paste(as.numeric(intersect(source_group,
+                                                  target_group)),
+                                              collapse = ' ')
+
+                                      })
+write.csv(corp_info_edge_list,
+          'corp_info_edge_list.csv'
+          )
+
+corp_info_igraph<- graph_from_data_frame(as.matrix.data.frame(corp_info_edge_list),
+                                       directed = TRUE
+                                       )
+# V(corp_info_d3graph)$group_id <- corp_info_edge_list$group_id
+
+E(corp_info_igraph)$overlap_prob <- corp_info_edge_list$overlap_prop
+readr::write_rds(corp_info_igraph,
+          'corp_info_igraph.rds')
+library(networkD3)
+corp_info_d3graph <- igraph_to_networkD3(corp_info_igraph)
+
+corp_info_d3graph$links$group_id <- corp_info_edge_list$group_id
+corp_info_d3graph$links$overlap_prop <- corp_info_edge_list$overlap_prop
+readr::write_rds(corp_info_d3graph,
+          'corp_info_d3graph.rds')
+
+
+# owners_info_adj_matrix <- data.matrix(owners_info_adj_matrix)
+
+
+```
+
+  
