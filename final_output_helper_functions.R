@@ -76,7 +76,7 @@ situs_owner_string_dist_matrix = function(situs_owner_strings,
                           (tapply(austin_parcel_data_merged$property_units,
                                   austin_parcel_data_merged$situs_pID,
                                   function(units){
-                                    sum(as.numeric(units)>10)>0
+                                    sum(as.numeric(units)>2)>0
                                   })))
   readr::write_rds(strings_used,
                    'strings_used.rds')
@@ -86,27 +86,40 @@ situs_owner_string_dist_matrix = function(situs_owner_strings,
                                                                            q = 2,
                                                                            method = 'cosine',
                                                                            useName = 'strings'))
-  readr::write_rds(situs_owner_cosine_dist_matrix,
-                   sprintf("situs_owner_cosine_dist_matrix_q%s.rds",
-                           q),
-                   version = 3,
-                   compress = 'gz')
   situs_owner_cosine_dist_matrix
 }
 
 situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
                              owner_data){
-  situs_pIDs <- unique(owner_data$situs_pID)
-  situs_owner_cosine_sim_matrix <- 1 - situs_owner_cosine_dist_matrix
-  situs_neighbors <- sapply(1:nrow(situs_owner_cosine_sim_matrix),
+  situs_pIDs <- names(which((tapply(owner_data$is_target,
+                                    owner_data$situs_pID, 
+                                    function(x){
+                                      sum(as.numeric(x))>0
+                                    }
+                                    )
+                             )|
+                              (tapply(owner_data$property_units,
+                                      owner_data$situs_pID,
+                                      function(units){
+                                        sum(as.numeric(units)>5)>0
+                                        }))))
+  print(length(situs_pIDs))
+  print(head(situs_pIDs))
+  print(dim(situs_owner_cosine_dist_matrix))
+  # situs_owner_cosine_sim_matrix <- 1 - situs_owner_cosine_dist_matrix
+  situs_neighbors <- sapply(1:nrow(situs_owner_cosine_dist_matrix),
                             function(index){
-                              unique(c(which(situs_owner_cosine_sim_matrix[index,]>0.9),
-                                       which(situs_owner_cosine_sim_matrix[,index]>0.9)
+                              unique(c(which(situs_owner_cosine_dist_matrix[index,]<0.1),
+                                       which(situs_owner_cosine_dist_matrix[,index]<0.1)
                               ))
                             })
-  matched_owners_inds_uniq<-unique(lapply(situs_neighbors,
-                                          function(inds){
-                                            # print(inds)
+  print(situs_neighbors)
+  
+  print('neigh')
+  registerDoFuture()
+  plan(multisession, workers = 4)
+  matched_owners_inds_uniq<-unique(foreach(inds = situs_neighbors) %dopar% {
+                                            print(inds)
                                             result <-unique(as.numeric(  
                                               unlist(sapply(inds,
                                                             function(ind){
@@ -114,35 +127,39 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
                                                               inner_result <- append(inner_result,
                                                                                      sapply(inner_result,
                                                                                             function(ind){
+                                                                                              print(ind)
                                                                                               situs_neighbors[[ind]]
                                                                                             }))
                                                               inner_result
                                                             }
-                                              )
-                                              )))
+                                                            )
+                                                     )))
                                             result = union(result,inds)
                                             result <- result[order(result)]
-                                            
                                             result
-                                          }))
-  situs_group_assignment <- data.frame(situs_pIDs)
-  
-  situs_group_assignment$group_assign <- sapply(1:length(situs_pIDs), 
-                                                function(index){
-                                                  which(unlist(lapply(matched_owners_inds_uniq,
-                                                                      function(set){index %in% set})))[[1]]
-                                                  
-                                                })
-  situs_group_assignment$group_assign <- as.numeric(situs_group_assignment[,2])
+                                          })
+  print('match')
+  print(length(matched_owners_inds_uniq))
+  print(matched_owners_inds_uniq)
+  situs_group_assignment <- data.frame(situs_pID = situs_pIDs)
+  print(head(situs_group_assignment))
+  situs_group_assignment$group_assign <- foreach(index = 1:length(situs_pIDs),
+                                                 .combine = 'c') %dopar% {
+                                                  results <- which(unlist(lapply(matched_owners_inds_uniq,
+                                                                      function(set){index %in% set})))
+                                                  paste(results,
+                                                        collapse = ',')
+                                                 }
+  print(situs_group_assignment)
   situs_group_assignment
 }
 
 parcel_geolocate = function(owner_data,
                             situs_group_assignment){
-  
+  owner_data$situs_pID <- as.character(owner_data$situs_pID )
   owner_data <-dplyr::left_join(owner_data,
                                 situs_group_assignment,
-                                by = c('situs_pID'= 'situs_pIDs'))
+                                by = c('situs_pID'= 'situs_pID'))
   
   unique_situs_addr <- data.frame(situs_addr=unique(owner_data$situs_address))
   
@@ -151,9 +168,10 @@ parcel_geolocate = function(owner_data,
                nrow(unique_situs_addr))
 
   inds_used <- list(start = start_inds,end = end_inds)
-
+  registerDoFuture()
+  plan(multisession, workers = 8)
   owners_info_scraped_coords <- foreach(index = 1:length(inds_used$start),
-                                        .combine = 'rbind') %do% {
+                                        .combine = 'rbind') %dopar% {
                                           start_ind = inds_used$start[index]
                                           end_ind = inds_used$end[index]
                                           owner_coords <- data.frame(situs_addr = unique_situs_addr[start_ind:end_ind,]) %>%
@@ -166,12 +184,12 @@ parcel_geolocate = function(owner_data,
   
   
   owners_info_scraped_coords$id <- NULL
-  
+  owners_info_scraped_coords$input_address <- NULL
+  owners_info_scraped_coords$matched_address <- NULL  
   owners_info_total <- left_join(owner_data,
                                  owners_info_scraped_coords,
                                  by = c('situs_address'='situs_addr'))
-  owners_info_total$input_address <- NULL
-  owners_info_total$matched_address <- NULL
+
   
   owners_info_total <- owners_info_total %>% 
     rename(situs_lat = lat,
