@@ -173,10 +173,16 @@ download_tcad_austin = function(){
     html_elements('a')
   link_used <- base_html[grepl('Special.*export.*JSON',base_html)] %>% html_attr('href')
   
-  old_link <- read.csv('link_used.csv',
-                       row.names = 'X')
+  old_link <- readLines('link_used.csv',
+                        
+                        warn = FALSE
+                        )
+  if(sum(grepl('zip',list.files()))>0){
+    download.file(link_used,
+                  'tcad_special_export.zip')
+  }
   if(link_used!=old_link){
-    write.csv(link_used,
+    writeLines(link_used,
               'link_used.csv')
     download.file(link_used,
                   'tcad_special_export.zip')
