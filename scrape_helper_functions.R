@@ -452,84 +452,53 @@ colnames_used <- c('owner_name_scraped',
 owner_scrape_actual = function(austin_parcel_data_merged
                               ){
   
-  # print(Sys.time())
-  # insist_scrape_owner = purrr:::insistently(scrape_owner_api,
-  #                                           rate =purrr::rate_backoff(pause_base = 2,
-  #                                                               pause_cap = 30,
-  #                                                               pause_min = 1,
-  #                                                               max_times = 3,
-  #                                                               jitter = TRUE
-  #                                           ))
-  # registerDoFuture()
-  # plan(multisession, workers = 6)
-  # target_properties = dplyr::filter(austin_parcel_data_merged, is_target==TRUE)
-  # target_owner_info = foreach(index =1:nrow(target_properties),
-  #                             .combine = 'rbind',
-  #                             .options.RNG = 8989,
-  #                             .export = financial_marker_string) %dopar% {
-  #           owner_name =target_properties$owner_name[index]
-  #           owner_address = target_properties$owner_address[index]
-  #           situs_pID = target_properties$situs_pID[index]
-  #           situs_address = target_properties$situs_address[index]
-  #           
-  #           
-  #           property_owner_info <- tryCatch({insist_scrape_owner(owner_name, 
-  #                                                                situs_pID = situs_pID , 
-  #                                                                situs_address = situs_address,
-  #                                                                veneer_owner = owner_name,
-  #                                                                veneer_owner_mail_address = owner_address)},
-  #                                           error=function(cond){
-  #                                             cond}
-  #                                           )
-  #           # print(property_owner_info)
-  #           if((is.null(property_owner_info)) |
-  #              ('error' %in% class(property_owner_info))){
-  #             property_owner_info <- data.frame(t(c(rep(NA, 14),
-  #                                                   situs_pID)
-  #                                                 )
-  #             )            
-  #             }
-  #           first_prop <- index!=1
-  #           colnames(property_owner_info) <- colnames_used
-  #           data.table::fwrite(property_owner_info,
-  #                              
-  #                              'owner_data_total.csv',
-  #                              append = first_prop,
-  #                              sep = ','
-  #                              )
-  #           property_owner_info
-  #         }
-  # target_owner_info <- target_owner_info %>%
-  #   dplyr::group_by(situs_pID) %>%
-  #   dplyr::summarise(owners_name_scraped = paste(unique(owner_name_scraped),
-  #                                                collapse = ', '),
-  #             owner_mail_address_scraped = paste(unique(owner_mail_address),
-  #                                        collapse = ', '),
-  #             owner_active_year = paste(unique(owner_active_year),
-  #                                       collapse = ', '),
-  #             corp_business_name = paste(unique(corp_business_name),
-  #                                        collapse = ', '),
-  #             corp_TTN = paste(unique(corp_TTN),
-  #                              collapse = ', '),
-  #             corp_mail_address = paste(unique(corp_mail_address),
-  #                                       collapse = ', '),
-  #             corp_right_to_transact_business_tx_status =paste(unique(corp_right_to_transact_business_tx_status),
-  #                                                              collapse = ', '),
-  #             corp_state_of_formation = paste(unique(corp_state_of_formation),
-  #                                             collapse = ', '),
-  #             
-  #             corp_sos_registration_status = paste(unique(corp_sos_registration_status),
-  #                                                  collapse = ', '),
-  #             corp_effective_sos_registration_date =paste(unique(corp_effective_sos_registration_date),
-  #                                                         collapse = ', '),
-  #             corp_tx_sos_file_num = paste(unique(corp_tx_sos_file_num),
-  #                                          collapse = ', '),
-  #             corp_registered_agent_name = paste(unique(corp_registered_agent_name),
-  #                                                collapse = ', '),
-  #             corp_registered_agent_mail_add = paste(unique(corp_registered_agent_mail_add),
-  #                                                    collapse = ', ')
-  #             )
-  target_owner_info <- read.csv('owner_data_total.csv')
+  print(Sys.time())
+  insist_scrape_owner = purrr:::insistently(scrape_owner_api,
+                                            rate =purrr::rate_backoff(pause_base = 2,
+                                                                pause_cap = 30,
+                                                                pause_min = 1,
+                                                                max_times = 3,
+                                                                jitter = TRUE
+                                            ))
+  registerDoFuture()
+  plan(multisession, workers = 6)
+  target_properties = dplyr::filter(austin_parcel_data_merged, is_target==TRUE)
+  target_owner_info = foreach(index =1:nrow(target_properties),
+                              .combine = 'rbind',
+                              .options.RNG = 8989,
+                              .export = financial_marker_string) %dopar% {
+            owner_name =target_properties$owner_name[index]
+            owner_address = target_properties$owner_address[index]
+            situs_pID = target_properties$situs_pID[index]
+            situs_address = target_properties$situs_address[index]
+
+
+            property_owner_info <- tryCatch({insist_scrape_owner(owner_name,
+                                                                 situs_pID = situs_pID ,
+                                                                 situs_address = situs_address,
+                                                                 veneer_owner = owner_name,
+                                                                 veneer_owner_mail_address = owner_address)},
+                                            error=function(cond){
+                                              cond}
+                                            )
+            # print(property_owner_info)
+            if((is.null(property_owner_info)) |
+               ('error' %in% class(property_owner_info))){
+              property_owner_info <- data.frame(t(c(rep(NA, 14),
+                                                    situs_pID)
+                                                  )
+              )
+              }
+            first_prop <- index!=1
+            colnames(property_owner_info) <- colnames_used
+            data.table::fwrite(property_owner_info,
+
+                               'owner_data_total.csv',
+                               append = first_prop,
+                               sep = ','
+                               )
+            property_owner_info
+
   
   austin_parcel_data_merged <- dplyr::left_join(austin_parcel_data_merged,
                                                   target_owner_info,
