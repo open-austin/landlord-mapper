@@ -498,7 +498,38 @@ owner_scrape_actual = function(austin_parcel_data_merged
                                sep = ','
                                )
             property_owner_info
-
+          }
+  # target_owner_info <- target_owner_info %>%
+  #   dplyr::group_by(situs_pID) %>%
+  #   dplyr::summarise(owners_name_scraped = paste(unique(owner_name_scraped),
+  #                                                collapse = ', '),
+  #             owner_mail_address_scraped = paste(unique(owner_mail_address),
+  #                                        collapse = ', '),
+  #             owner_active_year = paste(unique(owner_active_year),
+  #                                       collapse = ', '),
+  #             corp_business_name = paste(unique(corp_business_name),
+  #                                        collapse = ', '),
+  #             corp_TTN = paste(unique(corp_TTN),
+  #                              collapse = ', '),
+  #             corp_mail_address = paste(unique(corp_mail_address),
+  #                                       collapse = ', '),
+  #             corp_right_to_transact_business_tx_status =paste(unique(corp_right_to_transact_business_tx_status),
+  #                                                              collapse = ', '),
+  #             corp_state_of_formation = paste(unique(corp_state_of_formation),
+  #                                             collapse = ', '),
+  #             
+  #             corp_sos_registration_status = paste(unique(corp_sos_registration_status),
+  #                                                  collapse = ', '),
+  #             corp_effective_sos_registration_date =paste(unique(corp_effective_sos_registration_date),
+  #                                                         collapse = ', '),
+  #             corp_tx_sos_file_num = paste(unique(corp_tx_sos_file_num),
+  #                                          collapse = ', '),
+  #             corp_registered_agent_name = paste(unique(corp_registered_agent_name),
+  #                                                collapse = ', '),
+  #             corp_registered_agent_mail_add = paste(unique(corp_registered_agent_mail_add),
+  #                                                    collapse = ', ')
+  #             )
+  target_owner_info <- read.csv('owner_data_total.csv')
   
   austin_parcel_data_merged <- dplyr::left_join(austin_parcel_data_merged,
                                                   target_owner_info,
