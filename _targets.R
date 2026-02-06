@@ -53,7 +53,7 @@ data_links <- list(Code_Complaints = 'https://data.austintexas.gov/Public-Safety
 base_used = c('Austin_Code_Complaint_Cases',
               'Short_Term_Rental_Locations',
               'Zoning_Cases')
-Sys.setenv(CENSUS_KEY='cdd487fd377da61dfdecfbcdb620f7a94f3c5b6f')
+Sys.setenv(CENSUS_KEY=`YOUR OWN CENSUS API KEY GOES HERE`)
 Sys.getenv("CENSUS_KEY")
 
 # Set target options:
@@ -217,3 +217,4 @@ list(
 #   penguins_data_raw = read_csv(penguins_csv_file, show_col_types = FALSE),
 #   penguins_data = clean_penguin_data(penguins_data_raw)
 # )
+
