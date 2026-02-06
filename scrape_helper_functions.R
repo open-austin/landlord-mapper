@@ -177,7 +177,7 @@ download_tcad_austin = function(){
                         
                         warn = FALSE
                         )
-  if(sum(grepl('zip',list.files()))>0){
+  if(sum(grepl('zip',list.files()))==0){
     download.file(link_used,
                   'tcad_special_export.zip')
   }
@@ -840,5 +840,6 @@ scrape_owner = function(owner_name,
   # print(results)
   return(results)
 }
+
 
 
