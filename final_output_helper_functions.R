@@ -109,8 +109,8 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
   # situs_owner_cosine_sim_matrix <- 1 - situs_owner_cosine_dist_matrix
   situs_neighbors <- sapply(1:nrow(situs_owner_cosine_dist_matrix),
                             function(index){
-                              unique(c(which(situs_owner_cosine_dist_matrix[index,]<0.1),
-                                       which(situs_owner_cosine_dist_matrix[,index]<0.1)
+                              unique(c(which(situs_owner_cosine_dist_matrix[index,]<0.2),
+                                       which(situs_owner_cosine_dist_matrix[,index]<0.2)
                               ))
                             })
   print(situs_neighbors)
@@ -138,11 +138,8 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
                                             result <- result[order(result)]
                                             result
                                           })
-  print('match')
-  print(length(matched_owners_inds_uniq))
-  print(matched_owners_inds_uniq)
+
   situs_group_assignment <- data.frame(situs_pID = situs_pIDs)
-  print(head(situs_group_assignment))
   situs_group_assignment$group_assign <- foreach(index = 1:length(situs_pIDs),
                                                  .combine = 'c') %dopar% {
                                                   results <- which(unlist(lapply(matched_owners_inds_uniq,
@@ -150,7 +147,6 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
                                                   paste(results,
                                                         collapse = ',')
                                                  }
-  print(situs_group_assignment)
   situs_group_assignment
 }
 
@@ -257,6 +253,7 @@ final_data_merge = function(owners_data_total,
   
   
 }
+
 
 
 
