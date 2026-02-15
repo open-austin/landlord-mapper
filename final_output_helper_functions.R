@@ -12,11 +12,13 @@ situs_owner_string_gen = function(owner_data){
     unique_owners <- unique(data_used$owner_name)
     unique_owner_add <- unique(data_used$owner_address)
     corp_name <- unique(data_used$corp_business_name)
-    
-    corp_address <- unique(data_used$corp_mail_address)
+    corp_address <- unique(address_clean(data_used,
+                                         'corp_mail_address'))
     registered_agent <- unique(data_used$corp_registered_agent_name)
-    registered_agent_add <-unique(data_used$corp_registered_agent_mail_add)
-    scraped_owner_address <- unique(data_used$owner_address_scraped)
+    registered_agent_add <-unique( address_clean(data_used,
+                                                'corp_registered_agent_mail_add'))
+    scraped_owner_address <- unique(address_clean(data_used,
+                                                  'owner_address_scraped'))
     
     scraped_owner <- unique(data_used$owner_name_scraped)
     
@@ -24,20 +26,21 @@ situs_owner_string_gen = function(owner_data){
                                 scraped_owner)))
     unique_entities <- paste(unique_entities[order(unique_entities)],
                              collapse = ' ')
-    
+    # print(unique_entities)
     unique_addresses <- na.omit(unique(unlist(c(unique_owner_add,
                                  corp_address,
                                  registered_agent_add,
                                  scraped_owner_address))))
     unique_addresses <- paste(unique_addresses[order(unique_addresses)],
                               collapse = ' ')
+    # print(unique_addresses)
     unique_individuals <- na.omit(unique(unique_owners,
                                  # unique_owners_secondary_name,
                                  registered_agent
                                  ))
     unique_individuals <- paste(unique_individuals[order(unique_individuals)],
                                 collapse = ' ')
-    
+    # print(unique_individuals)
     result <- paste(unique_entities,
                     unique_addresses,
                     unique_individuals,
@@ -76,14 +79,12 @@ situs_owner_string_dist_matrix = function(situs_owner_strings,
                           (tapply(austin_parcel_data_merged$property_units,
                                   austin_parcel_data_merged$situs_pID,
                                   function(units){
-                                    sum(as.numeric(units)>2)>0
+                                    sum(as.numeric(units)>5)>0
                                   })))
   readr::write_rds(strings_used,
                    'strings_used.rds')
-  print(head(strings_used))
-  print(length(strings_used))
   situs_owner_cosine_dist_matrix <- as.matrix(stringdist::stringdistmatrix(unlist(situs_owner_strings[strings_used]),
-                                                                           q = 2,
+                                                                           q = 3,
                                                                            method = 'cosine',
                                                                            useName = 'strings'))
   situs_owner_cosine_dist_matrix
@@ -91,7 +92,7 @@ situs_owner_string_dist_matrix = function(situs_owner_strings,
 
 situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
                              owner_data){
-  situs_pIDs <- names(which((tapply(owner_data$is_target,
+  situs_pIDs <-names(which((tapply(owner_data$is_target,
                                     owner_data$situs_pID, 
                                     function(x){
                                       sum(as.numeric(x))>0
@@ -103,50 +104,81 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
                                       function(units){
                                         sum(as.numeric(units)>5)>0
                                         }))))
-  print(length(situs_pIDs))
-  print(head(situs_pIDs))
-  print(dim(situs_owner_cosine_dist_matrix))
+  # print(length(situs_pIDs))
+  # print(head(situs_pIDs))
+  # print(dim(situs_owner_cosine_dist_matrix))
   # situs_owner_cosine_sim_matrix <- 1 - situs_owner_cosine_dist_matrix
   situs_neighbors <- sapply(1:nrow(situs_owner_cosine_dist_matrix),
                             function(index){
+                             
                               unique(c(which(situs_owner_cosine_dist_matrix[index,]<0.2),
                                        which(situs_owner_cosine_dist_matrix[,index]<0.2)
-                              ))
+                                       ))
                             })
   print(situs_neighbors)
   
+  readr::write_rds(situs_neighbors,
+                   'situs_neighbors.rds')
   print('neigh')
-  registerDoFuture()
-  plan(multisession, workers = 4)
-  matched_owners_inds_uniq<-unique(foreach(inds = situs_neighbors) %dopar% {
-                                            print(inds)
-                                            result <-unique(as.numeric(  
-                                              unlist(sapply(inds,
-                                                            function(ind){
-                                                              inner_result <-c(ind, situs_neighbors[[ind]])
-                                                              inner_result <- append(inner_result,
-                                                                                     sapply(inner_result,
-                                                                                            function(ind){
-                                                                                              print(ind)
-                                                                                              situs_neighbors[[ind]]
-                                                                                            }))
-                                                              inner_result
-                                                            }
-                                                            )
-                                                     )))
-                                            result = union(result,inds)
-                                            result <- result[order(result)]
+  iterative_add = function(inds, neighbors){
+    result <-unique(as.numeric(  
+      unlist(sapply(inds,
+                    function(ind){
+                      inner_result <-neighbors[[ind]]
+                      inner_result <- append(inner_result,
+                                             sapply(inner_result,
+                                                    function(ind){
+                                                      # print(ind)
+                                                      neighbors[[ind]]
+                                                    }))
+                      inner_result
+                    })))
+      )
+    result
+  }
+  # registerDoFuture()
+  # plan(multisession, workers = 4)
+  matched_owners_inds_uniq<-unique(foreach(inds = situs_neighbors) %do% {
+                                            # print(inds)
+                                            result <-iterative_add(inds = inds,
+                                                                   situs_neighbors)
+                                            base_length = length(result)
+                                            new_length = 0
+                                            while(new_length!=base_length){
+                                              base_length <- length(result)
+                                              result <- iterative_add(result,
+                                                                      situs_neighbors)
+                                              new_length <- length(result)
+                                            }
+                                            
+                                            
+                                            
+                                            result <- unique(result[order(result)])
+                                            rem_inds <- which(situs_owner_cosine_dist_matrix[inds[1],result]>0.25)
+                                            if(length(rem_inds)>0){
+                                              result <- result[-rem_inds]
+                                            }
+                                            
                                             result
                                           })
-
+  
+  readr::write_rds(matched_owners_inds_uniq,
+                   'matched_owners_inds_uniq.rds'
+                   )
+  # print('match')
+  # print(length(matched_owners_inds_uniq))
+  # print(matched_owners_inds_uniq)
   situs_group_assignment <- data.frame(situs_pID = situs_pIDs)
+  print(head(situs_group_assignment))
   situs_group_assignment$group_assign <- foreach(index = 1:length(situs_pIDs),
-                                                 .combine = 'c') %dopar% {
+                                                 .combine = 'c') %do% {
                                                   results <- which(unlist(lapply(matched_owners_inds_uniq,
                                                                       function(set){index %in% set})))
                                                   paste(results,
                                                         collapse = ',')
+                                                  # results
                                                  }
+  # print(situs_group_assignment)
   situs_group_assignment
 }
 
@@ -165,7 +197,7 @@ parcel_geolocate = function(owner_data,
 
   inds_used <- list(start = start_inds,end = end_inds)
   registerDoFuture()
-  plan(multisession, workers = 8)
+  plan(multisession, workers = 6)
   owners_info_scraped_coords <- foreach(index = 1:length(inds_used$start),
                                         .combine = 'rbind') %dopar% {
                                           start_ind = inds_used$start[index]
@@ -253,7 +285,6 @@ final_data_merge = function(owners_data_total,
   
   
 }
-
 
 
 
