@@ -111,8 +111,8 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
   situs_neighbors <- sapply(1:nrow(situs_owner_cosine_dist_matrix),
                             function(index){
                              
-                              unique(c(which(situs_owner_cosine_dist_matrix[index,]<0.2),
-                                       which(situs_owner_cosine_dist_matrix[,index]<0.2)
+                              unique(c(which(situs_owner_cosine_dist_matrix[index,]<0.23),
+                                       which(situs_owner_cosine_dist_matrix[,index]<0.23)
                                        ))
                             })
   print(situs_neighbors)
@@ -277,7 +277,9 @@ final_data_merge = function(owners_data_total,
     )
     ],
     by = c('situs_zip'='zip_code_tabulation_area')
-    )
+    ) %>%
+    relocate(situs_address,
+             .before = situs_pID)
   
   write.csv(owners_data_total_supp,
             'owners_data_total.csv')
@@ -285,6 +287,3 @@ final_data_merge = function(owners_data_total,
   
   
 }
-
-
-
