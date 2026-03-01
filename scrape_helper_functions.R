@@ -418,9 +418,9 @@ scrape_owner_api = function(owner_name,
     }
   }
   
-  result$owner_mail_address <- address_clean(result,
+  results$owner_mail_address <- address_clean(results,
                                              'owner_mail_address')
-  result$owner_mail_address <- address_clean(result,
+  results$owner_mail_address <- address_clean(results,
                                              'owner_mail_address')
   results$situs_pID <- situs_pID
   # print(results)
@@ -840,6 +840,7 @@ scrape_owner = function(owner_name,
   # print(results)
   return(results)
 }
+
 
 
 
