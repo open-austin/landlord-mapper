@@ -60,7 +60,7 @@ financial_marker_base_string <- paste(financial_markers_base,
 
 address_clean = function(data = austin_parcel_data_merged,
                          col = 'situs_address'){
-  data_used <- data[,col]
+  data_used <- toupper(data[,col])
   
   data_used = gsub('SUITE|STE|CONDO|UNIT|APT|BLDG|[[:punct:]]',
                    '', 
@@ -79,15 +79,18 @@ address_clean = function(data = austin_parcel_data_merged,
                      function(address){
                        regex_used <- '[[:digit:]]+TH|[[:digit:]]+RD|[[:digit:]]+ND'
                        start_ind <- regexpr(regex_used, address)
-                       
-                       if(start_ind<0){
+                       # print(attr(start_ind, 
+                       #            'match.length'))
+                       match_length_str <- attr(start_ind, 
+                                                'match.length')
+                       if(is.na(match_length_str)|
+                          (match_length_str==(-1))){
                          return(address)
                        }
                        gsub(regex_used,
-                            substr(address,(start_ind),(start_ind+attr(start_ind,
-                                                                       'match.length')-3
-                            )
-                            ),
+                            substr(address,(start_ind),(start_ind+match_length_str-3
+                                                        )
+                                   ),
                             address)
                      }
   )
@@ -287,16 +290,18 @@ target_property_gen = function(owner_data,
                                      c('B4'))|
                                     (austin_parcel_data_merged$propertyProf_landStateCd %in%
                                        c('B4'))) ,'property_units']<- 4
-  austin_parcel_data_merged[!which((austin_parcel_data_merged$propertyProf_imprvStateCd %in%
-                                      c('A1','A2','A3','A4','A5',
-                                        'B1','B2','B3','B4','B5')
-  )|
-    (austin_parcel_data_merged$propertyProf_landStateCd %in%
-       c('A1','A2','A3','A4','A5',
-         'B1','B2','B3','B4','B5')
-    )
-  )
-  ] <- 0
+  austin_parcel_data_merged[which((austin_parcel_data_merged$propertyProf_imprvStateCd %in%
+                                      c('C1','C2','C3',
+                                        'D1','D2',
+                                        'E1',
+                                        'F1','F2')
+                                   )|
+                                    (austin_parcel_data_merged$propertyProf_landStateCd %in%
+                                       c('C1','C2','C3',
+                                         'D1','D2',
+                                         'E1',
+                                         'F1','F2')
+                                     )), 'property_units'] <- 0
   
   austin_parcel_data_merged$is_financialized <- grepl(financial_marker_string,  
                                                       austin_parcel_data_merged$owner_name
