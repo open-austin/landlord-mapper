@@ -1,26 +1,57 @@
 
+financial_markers_base<- c('LTD',
+                           'L T D',
+                           'L\\.?T\\.?D\\.?',
+                           'LLC',
+                           'L L C',
+                           'L\\.?L\\.?C\\.?',
+                           'LP',
+                           'L P',
+                           'L\\.?P\\.?',
+                           'LLLP',
+                           'L L L P',
+                           'L\\.?L\\.?L\\.?P\\.?',
+                           'INC',
+                           'I N C',
+                           'I\\.?N\\.?C\\.?',
+                           'LC',
+                           'L C',
+                           'L\\.?C\\.?')
+
+financial_marker_base_string <- paste(financial_markers_base, 
+                                      collapse = '|')
+registered_agent_string <- '(5900 BALCONES DR(IVE)?(.+(100|4000|4346))?([[:space:]]AUSTIN TX 78731)?)|(1999 BRYAN ST.+(900)? DALLAS TX 75201)|(211 E(.+)7(.+) STREET(.+)620 AUSTIN TX 78701)|CORPORATE CENTER ONE 5301 SOUTHWEST PARKWAY(.+)AUSTIN TX 78735|(NATIONAL )?REGISTERED AGENT(S)?(,)?([[:space:]])?(INC|SOLUTIONS|LLC)?|COGENCY GLOBAL|1601 ELM ST 4360 DALLAS TX 75201|(CAPITOL)?([[:space:]])?CORPORAT(E|ION) SERVICE(S)?([[:space:]])?(INC|COMPANY|LLC)?|LAWYER|1501 S MOPAC EXPY 220 AUSTIN TX 78746|2028 E BEN WHITE BLVD 240([[:digit:]]{4})? AUSTIN TX 78741|(C)?([[:space:]])?(T)?([[:space:]])?CORPORATION SYSTEM|3225 MCLEOD DR( 100 LAS VEGAS NV 89121)?'
+
+#row.names(d)[[28]]
+# [1] "906 W JAMES ST LLC GRANT MCGREGOR 3267 BEE CAVES RD 107151 AUSTIN TX 78746 906 W JAMES ST LLC TEXAN"
 situs_owner_string_gen = function(owner_data){
   # owner_data <- head(owner_data,100)
   situs_pIDs <- unique(owner_data$situs_pID)
   
   registerDoFuture()
-  # 
+  # 3312
   plan(multisession, workers = 6)
   situs_owner_strings <-foreach(pID = situs_pIDs) %dopar% {
     data_used <- dplyr::filter(owner_data,
                                situs_pID==pID)
-    unique_owners <- unique(data_used$owner_name)
-    unique_owner_add <- unique(data_used$owner_address)
-    corp_name <- unique(data_used$corp_business_name)
-    corp_address <- unique(address_clean(data_used,
-                                         'corp_mail_address'))
-    registered_agent <- unique(data_used$corp_registered_agent_name)
-    registered_agent_add <-unique( address_clean(data_used,
-                                                'corp_registered_agent_mail_add'))
-    scraped_owner_address <- unique(address_clean(data_used,
-                                                  'owner_address_scraped'))
+    unique_owners <- toupper(unique(data_used$owner_name))
+    unique_owners_secondary_name <- toupper(unique(gsub('%[[:space:]]?',
+                                                        '',
+                                                        na.omit(data_used$owner_nameSecondary)
+                                                        )
+                                                   )
+                                            )
+    unique_owner_add <- toupper(unique(data_used$owner_address))
+    corp_name <- toupper(unique(data_used$corp_business_name))
+    corp_address <- toupper(unique(address_clean(data_used,
+                                         'corp_mail_address')))
+    registered_agent <- toupper(unique(data_used$corp_registered_agent_name))
+    registered_agent_add <-toupper(unique( address_clean(data_used,
+                                                'corp_registered_agent_mail_add')))
     
-    scraped_owner <- unique(data_used$owner_name_scraped)
+    scraped_owner_address <- toupper(unique(address_clean(data_used,
+                                                  'owner_address_scraped')))
+    scraped_owner <- toupper(unique(data_used$owner_name_scraped))
     
     unique_entities <- na.omit(unique(c(corp_name,
                                 scraped_owner)))
@@ -29,15 +60,16 @@ situs_owner_string_gen = function(owner_data){
     # print(unique_entities)
     unique_addresses <- na.omit(unique(unlist(c(unique_owner_add,
                                  corp_address,
-                                 registered_agent_add,
+                                 # registered_agent_add,
                                  scraped_owner_address))))
     unique_addresses <- paste(unique_addresses[order(unique_addresses)],
                               collapse = ' ')
     # print(unique_addresses)
-    unique_individuals <- na.omit(unique(unique_owners,
-                                 # unique_owners_secondary_name,
+    unique_individuals <- na.omit(unique(c(unique_owners,
+                                 unique_owners_secondary_name,
                                  registered_agent
-                                 ))
+                                 )))
+    
     unique_individuals <- paste(unique_individuals[order(unique_individuals)],
                                 collapse = ' ')
     # print(unique_individuals)
@@ -45,13 +77,20 @@ situs_owner_string_gen = function(owner_data){
                     unique_addresses,
                     unique_individuals,
                     sep = ' ')
-    result <- gsub('[[:space:]]{2,}',
-                   ' ',
-                   result
-                   )
+    result <- gsub(registered_agent_string,
+                   '',
+                   result)
+    result <-gsub(financial_marker_base_string,'',result)
+    
+    
     result <- gsub('[[:punct:]]',
                    '',
                    result)
+    result <- trimws(gsub('[[:space:]]{2,}',
+                   ' ',
+                   result
+                   ))
+    
     result[length(result)]
     
   }
@@ -65,7 +104,6 @@ situs_owner_string_gen = function(owner_data){
   
   
 }
-
 
 situs_owner_string_dist_matrix = function(situs_owner_strings, 
                                           austin_parcel_data_merged){
@@ -84,14 +122,25 @@ situs_owner_string_dist_matrix = function(situs_owner_strings,
   readr::write_rds(strings_used,
                    'strings_used.rds')
   situs_owner_cosine_dist_matrix <- as.matrix(stringdist::stringdistmatrix(unlist(situs_owner_strings[strings_used]),
-                                                                           q = 3,
+                                                                           q = 2,
                                                                            method = 'cosine',
                                                                            useName = 'strings'))
   situs_owner_cosine_dist_matrix
 }
 
+situs_neighbor_cov = function(situs_owner_cosine_dist_matrix){
+  Rfast::cova(q3_dist_matrix, large = TRUE)
+}
+
 situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
                              owner_data){
+  owner_data$owner_address <- gsub(registered_agent_string,
+                      '',
+                      owner_data$owner_address)
+  owner_data$corp_mail_address <- gsub(registered_agent_string,
+                                  '',
+                                  owner_data$corp_mail_address)
+
   situs_pIDs <-names(which((tapply(owner_data$is_target,
                                     owner_data$situs_pID, 
                                     function(x){
@@ -104,16 +153,76 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
                                       function(units){
                                         sum(as.numeric(units)>5)>0
                                         }))))
-  # print(length(situs_pIDs))
-  # print(head(situs_pIDs))
-  # print(dim(situs_owner_cosine_dist_matrix))
-  # situs_owner_cosine_sim_matrix <- 1 - situs_owner_cosine_dist_matrix
+  
   situs_neighbors <- sapply(1:nrow(situs_owner_cosine_dist_matrix),
                             function(index){
-                             
-                              unique(c(which(situs_owner_cosine_dist_matrix[index,]<0.23),
-                                       which(situs_owner_cosine_dist_matrix[,index]<0.23)
-                                       ))
+                              situs_pID_used <- situs_pIDs[index]
+                              data_used <- dplyr::filter(owner_data,
+                                                         situs_pID==situs_pID_used)
+                              owner_name_scrape_inds <-which(situs_pIDs %in%
+                                                               owner_data$situs_pID[which(owner_data$owner_name_scraped %in%
+                                                                 na.omit(gsub("^$",
+                                                                              NA,
+                                                                              unique(data_used$owner_name_scraped)
+                                                                              )
+                                                                         )
+                                                                 )])
+                              
+                              owner_name_inds <-which(situs_pIDs %in%
+                                                        owner_data$situs_pID[which(owner_data$owner_name %in%
+                                                                                     na.omit(gsub("^$",
+                                                                                                  NA,
+                                                                                                  unique(data_used$owner_name)
+                                                                                     )
+                                                                                     )
+                                                        )])
+                              
+                              owner_addr_scrape_inds <- which(situs_pIDs %in%
+                                                                owner_data$situs_pID[which(owner_data$owner_address_scraped %in%
+                                                                                             na.omit(gsub("^$",
+                                                                                                          NA,
+                                                                                                          unique(data_used$owner_address_scraped)
+                                                                                             )
+                                                                                             )
+                                                                )])
+                              owner_addr_inds <-which(situs_pIDs %in%
+                                                        owner_data$situs_pID[which(owner_data$owner_address %in%
+                                                                                     na.omit(gsub("^$",
+                                                                                                  NA,
+                                                                                                  unique(data_used$owner_address)
+                                                                                     )
+                                                                                     )
+                                                        )]) 
+                              corp_addr_inds <- which(situs_pIDs %in%
+                                                        owner_data$situs_pID[which(owner_data$corp_mail_address %in%
+                                                                                     na.omit(gsub("^$",
+                                                                                                  NA,
+                                                                                                  unique(data_used$corp_mail_address)
+                                                                                     )
+                                                                                     )
+                                                        )])
+                              
+                              corp_bus_inds <- which(situs_pIDs %in%
+                                                       owner_data$situs_pID[which(owner_data$corp_business_name %in%
+                                                                                    na.omit(gsub("^$",
+                                                                                                 NA,
+                                                                                                 unique(data_used$corp_business_name)
+                                                                                    )
+                                                                                    )
+                                                       )])
+                                                     
+                              dist_inds <- unique(c(which(situs_owner_cosine_dist_matrix[index,]<0.15),
+                                                    which(situs_owner_cosine_dist_matrix[,index]<0.15)
+                                                    ))
+                              neighbor_inds <- unique(c(owner_name_scrape_inds,
+                                                 owner_name_inds,
+                                                 owner_addr_scrape_inds,
+                                                 owner_addr_inds,
+                                                 corp_addr_inds,
+                                                 corp_bus_inds,
+                                                 dist_inds))
+                              
+                              return(neighbor_inds[order(neighbor_inds)])
                             })
   print(situs_neighbors)
   
@@ -136,10 +245,8 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
       )
     result
   }
-  # registerDoFuture()
-  # plan(multisession, workers = 4)
+
   matched_owners_inds_uniq<-unique(foreach(inds = situs_neighbors) %do% {
-                                            # print(inds)
                                             result <-iterative_add(inds = inds,
                                                                    situs_neighbors)
                                             base_length = length(result)
@@ -151,25 +258,24 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
                                               new_length <- length(result)
                                             }
                                             
-                                            
-                                            
                                             result <- unique(result[order(result)])
-                                            rem_inds <- which(situs_owner_cosine_dist_matrix[inds[1],result]>0.25)
-                                            if(length(rem_inds)>0){
-                                              result <- result[-rem_inds]
-                                            }
                                             
+                                            # rem_inds <- which(situs_owner_cosine_dist_matrix[inds[1],result]>0.6)
+                                            # rem_inds <- unique(unlist(apply(situs_owner_cosine_dist_matrix[inds,result],2,
+                                            #                         function(col){which(col>0.6)})))
+                                            # rem_inds <- rem_inds[!(rem_inds %in% inds)]
+                                            # if(length(rem_inds)>0){
+                                            #   result <- result[-rem_inds]
+                                            # }
                                             result
                                           })
   
   readr::write_rds(matched_owners_inds_uniq,
                    'matched_owners_inds_uniq.rds'
                    )
-  # print('match')
-  # print(length(matched_owners_inds_uniq))
-  # print(matched_owners_inds_uniq)
   situs_group_assignment <- data.frame(situs_pID = situs_pIDs)
   print(head(situs_group_assignment))
+
   situs_group_assignment$group_assign <- foreach(index = 1:length(situs_pIDs),
                                                  .combine = 'c') %do% {
                                                   results <- which(unlist(lapply(matched_owners_inds_uniq,
@@ -196,6 +302,13 @@ parcel_geolocate = function(owner_data,
                nrow(unique_situs_addr))
 
   inds_used <- list(start = start_inds,end = end_inds)
+  
+  insist_geocode = purrr::insistently(geocode,
+                                      rate =purrr::rate_backoff(pause_base = 5,
+                                                                pause_cap = 30,
+                                                                max_times = 3,
+                                                                jitter = TRUE)
+                                      )
   registerDoFuture()
   plan(multisession, workers = 6)
   owners_info_scraped_coords <- foreach(index = 1:length(inds_used$start),
@@ -203,7 +316,7 @@ parcel_geolocate = function(owner_data,
                                           start_ind = inds_used$start[index]
                                           end_ind = inds_used$end[index]
                                           owner_coords <- data.frame(situs_addr = unique_situs_addr[start_ind:end_ind,]) %>%
-                                            geocode(situs_addr,
+                                            insist_geocode(situs_addr,
                                                     full_results = TRUE, 
                                                     method = 'census',
                                                     api_options = list(census_return_type = 'geographies'))
@@ -287,3 +400,6 @@ final_data_merge = function(owners_data_total,
   
   
 }
+
+
+
