@@ -20,11 +20,20 @@ financial_markers_base<- c('LTD',
 
 financial_marker_base_string <- paste(financial_markers_base, 
                                       collapse = '|')
-registered_agent_string <- '(5900 BALCONES DR(IVE)?(.+(100|4000|4346))?([[:space:]]AUSTIN TX 78731)?)|(1999 BRYAN ST.+(900)? DALLAS TX 75201)|(211 E(.+)7(.+) STREET(.+)620 AUSTIN TX 78701)|CORPORATE CENTER ONE 5301 SOUTHWEST PARKWAY(.+)AUSTIN TX 78735|(NATIONAL )?REGISTERED AGENT(S)?(,)?([[:space:]])?(INC|SOLUTIONS|LLC)?|COGENCY GLOBAL|1601 ELM ST 4360 DALLAS TX 75201|(CAPITOL)?([[:space:]])?CORPORAT(E|ION) SERVICE(S)?([[:space:]])?(INC|COMPANY|LLC)?|LAWYER|1501 S MOPAC EXPY 220 AUSTIN TX 78746|2028 E BEN WHITE BLVD 240([[:digit:]]{4})? AUSTIN TX 78741|(C)?([[:space:]])?(T)?([[:space:]])?CORPORATION SYSTEM|3225 MCLEOD DR( 100 LAS VEGAS NV 89121)?'
 
 #row.names(d)[[28]]
 # [1] "906 W JAMES ST LLC GRANT MCGREGOR 3267 BEE CAVES RD 107151 AUSTIN TX 78746 906 W JAMES ST LLC TEXAN"
 situs_owner_string_gen = function(owner_data){
+  registered_agent_add_string <-paste(unique(owner_data[grepl('REGISTER|(IN)?CORPORATE|SERVICE|LAWYER|CSC|SOLUTION|AGENT|AGENC|LEGAL|BUSINESS|TAX|MAIL|POST',
+                                                         owner_data$corp_registered_agent_name,
+                                                         ignore.case = TRUE),
+                                                   'corp_registered_agent_mail_add']),
+                                      collapse = '|')
+  registered_agent_name_string <-paste(unique(owner_data[grepl('REGISTER|(IN)?CORPORATE|SERVICE|LAWYER|CSC|SOLUTION|AGENT|AGENC|LEGAL|BUSINESS|TAX|MAIL|POST',
+                                                              owner_data$corp_registered_agent_name,
+                                                              ignore.case = TRUE),
+                                                        'corp_registered_agent_name']),
+                                      collapse = '|')
   # owner_data <- head(owner_data,100)
   situs_pIDs <- unique(owner_data$situs_pID)
   
@@ -77,7 +86,10 @@ situs_owner_string_gen = function(owner_data){
                     unique_addresses,
                     unique_individuals,
                     sep = ' ')
-    result <- gsub(registered_agent_string,
+    result <- gsub(registered_agent_add_string,
+                   '',
+                   result)
+    result <- gsub(registered_agent_name_string,
                    '',
                    result)
     result <-gsub(financial_marker_base_string,'',result)
@@ -134,12 +146,42 @@ situs_neighbor_cov = function(situs_owner_cosine_dist_matrix){
 
 situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
                              owner_data){
-  owner_data$owner_address <- gsub(registered_agent_string,
-                      '',
+  registered_agent_add_string <-paste(unique(owner_data[grepl('REGISTER|(IN)?CORPORATE|SERVICE|LAWYER|CSC|SOLUTION|AGENT|AGENC|LEGAL|BUSINESS|TAX|MAIL|POST',
+                                                              owner_data$corp_registered_agent_name,
+                                                              ignore.case = TRUE),
+                                                        'corp_registered_agent_mail_add']),
+                                      collapse = '|')
+  registered_agent_name_string <-paste(unique(owner_data[grepl('REGISTER|(IN)?CORPORATE|SERVICE|LAWYER|CSC|SOLUTION|AGENT|AGENC|LEGAL|BUSINESS|TAX|MAIL|POST',
+                                                               owner_data$corp_registered_agent_name,
+                                                               ignore.case = TRUE),
+                                                         'corp_registered_agent_name']),
+                                       collapse = '|')
+  
+  
+  owner_data$owner_address <- gsub(registered_agent_add_string,
+                                   NA,
                       owner_data$owner_address)
-  owner_data$corp_mail_address <- gsub(registered_agent_string,
-                                  '',
+  owner_data$corp_mail_address <- gsub(registered_agent_add_string,
+                                  NA,
                                   owner_data$corp_mail_address)
+  
+  owner_data$corp_registered_agent_mail_add <- gsub(registered_agent_add_string,
+                                                    NA,
+                                                    owner_data$corp_registered_agent_mail_add)
+  
+  
+  owner_data$corp_business_name <- gsub(registered_agent_name_string,
+                                   NA,
+                                   owner_data$corp_business_name)
+  owner_data$owner_name <- gsub(registered_agent_name_string,
+                                       NA,
+                                       owner_data$owner_name)
+  owner_data$owner_name_scraped <- gsub(registered_agent_name_string,
+                                NA,
+                                owner_data$owner_name_scraped)
+  owner_data$corp_registered_agent_name <- gsub(registered_agent_name_string,
+                                        NA,
+                                        owner_data$corp_registered_agent_name)
 
   situs_pIDs <-names(which((tapply(owner_data$is_target,
                                     owner_data$situs_pID, 
@@ -210,6 +252,22 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
                                                                                     )
                                                                                     )
                                                        )])
+                              reg_agent_name_inds <- which(situs_pIDs %in%
+                                                       owner_data$situs_pID[which(owner_data$corp_registered_agent_name %in%
+                                                                                    na.omit(gsub("^$",
+                                                                                                 NA,
+                                                                                                 unique(data_used$corp_registered_agent_name)
+                                                                                    )
+                                                                                    ) 
+                                                                                  )])
+                              reg_agent_add_inds <- which(situs_pIDs %in%
+                                                       owner_data$situs_pID[which(owner_data$corp_registered_agent_mail_add %in%
+                                                                                    na.omit(gsub("^$",
+                                                                                                 NA,
+                                                                                                 unique(data_used$corp_registered_agent_mail_add)
+                                                                                    )
+                                                                                    )
+                                                       )])
                                                      
                               dist_inds <- unique(c(which(situs_owner_cosine_dist_matrix[index,]<0.15),
                                                     which(situs_owner_cosine_dist_matrix[,index]<0.15)
@@ -220,6 +278,8 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
                                                  owner_addr_inds,
                                                  corp_addr_inds,
                                                  corp_bus_inds,
+                                                 reg_agent_name_inds,
+                                                 reg_agent_add_inds,
                                                  dist_inds))
                               
                               return(neighbor_inds[order(neighbor_inds)])
