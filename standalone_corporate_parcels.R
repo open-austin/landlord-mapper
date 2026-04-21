@@ -120,8 +120,17 @@ message("Using chunked jq streaming — each section is read ", PAGE_SIZE,
 # rows at a time, so the peak in-process memory is roughly:
 #   PAGE_SIZE * <columns> * <bytes/value>  ≈  a few MB per page.
 
+ALLOWED_SECTIONS <- c("owners", "situses", "propertyProfile",
+                      "propertyCharacteristics")
+
 stream_section <- function(zip_path, json_name, section, prefix,
                            page_size = PAGE_SIZE) {
+  # Whitelist the section name to prevent command injection.
+  if (!section %in% ALLOWED_SECTIONS) {
+    stop("Unknown section: ", section,
+         "\n  Must be one of: ", paste(ALLOWED_SECTIONS, collapse = ", "))
+  }
+
   # jq filter: for each parcel, expand the nested array and attach pID.
   jq_filter <- sprintf(
     '.[] | . as $p | (.%s // []) | .[] | . + {pID: $p.pID}',
@@ -136,14 +145,19 @@ stream_section <- function(zip_path, json_name, section, prefix,
 
   message("  Streaming section '", section, "' ...")
   con    <- pipe(cmd, open = "r")
-  chunks <- list()
+  on.exit(close(con), add = TRUE)   # always close even if stream_in() errors
+
+  chunks  <- list()
+  n_pages <- 0L
   jsonlite::stream_in(
     con,
-    handler  = function(page) { chunks[[length(chunks) + 1L]] <<- page },
+    handler = function(page) {
+      n_pages <<- n_pages + 1L
+      chunks[[n_pages]] <<- page   # pre-index avoids repeated length() calls
+    },
     pagesize = page_size,
     verbose  = FALSE
   )
-  close(con)
 
   df <- dplyr::bind_rows(chunks)
   if (nrow(df) == 0L) return(df)
