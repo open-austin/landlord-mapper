@@ -19,15 +19,21 @@
 #
 # Requirements
 # ------------
+# System tool (must be on PATH):
+#   jq  https://jqlang.github.io/jq/download/
+#       macOS:  brew install jq
+#       Linux:  sudo apt-get install jq
+#
 # R packages (installed automatically if missing):
 #   rvest, dplyr, jsonlite, readr
 #
 # Memory note
 # -----------
-# The TCAD JSON export is a large file. Parsing it with jsonlite requires
-# roughly 3x the uncompressed file size in free RAM (often 8–16 GB).
-# If you run out of memory, try closing other applications or running on a
-# machine / cloud VM with more RAM.
+# This script uses a chunked/jq-based approach: each nested section of the
+# TCAD JSON is streamed out of the ZIP via `unzip -p | jq` and fed into R
+# page-by-page with jsonlite::stream_in().  Only one page (PAGE_SIZE rows) is
+# held in memory at a time, so a MacBook Air with 8 GB of RAM can run this
+# comfortably without loading the full multi-GB file at once.
 #
 # No Python, no Selenium, no Census API key, no ijson needed.
 # ──────────────────────────────────────────────────────────────────────────────
@@ -46,12 +52,23 @@ library(dplyr)
 library(jsonlite)
 library(readr)
 
+# Check for jq (required for low-memory streaming extraction)
+if (nchar(Sys.which("jq")) == 0L) {
+  stop(
+    "'jq' is required but was not found on your PATH.\n",
+    "  macOS:  brew install jq\n",
+    "  Linux:  sudo apt-get install jq\n",
+    "  See:    https://jqlang.github.io/jq/download/"
+  )
+}
+
 # ── 1. Configuration ──────────────────────────────────────────────────────────
 
 options(timeout = 7200)  # allow up to 2 hours for large downloads
 
-zip_path <- "tcad_special_export.zip"   # where to save / look for the ZIP
-out_path <- "corporate_owned_parcels.csv"
+zip_path  <- "tcad_special_export.zip"   # where to save / look for the ZIP
+out_path  <- "corporate_owned_parcels.csv"
+PAGE_SIZE <- 10000L   # rows per page passed to stream_in() — tune down if RAM is tight
 
 # ── 2. Download TCAD data ─────────────────────────────────────────────────────
 # Scrapes traviscad.org/publicinformation for the latest "Special Export (JSON)"
@@ -82,46 +99,83 @@ if (file.exists(zip_path)) {
   message("Download complete.")
 }
 
-# ── 3. Inspect the ZIP and parse the JSON ─────────────────────────────────────
+# ── 3. Identify the JSON file inside the ZIP ──────────────────────────────────
 
 manifest  <- unzip(zip_path, list = TRUE)
 json_name <- manifest$Name[1]
 size_gb   <- round(manifest$Length[1] / 1e9, 2)
 
-message("Parsing: ", json_name, " (", size_gb, " GB uncompressed)")
-message("Memory needed: ~", round(size_gb * 3), " GB free RAM  — please wait ...")
+message("JSON file in ZIP: ", json_name, " (", size_gb, " GB uncompressed)")
+message("Using chunked jq streaming — each section is read ", PAGE_SIZE,
+        " rows at a time.")
 
-con <- unz(zip_path, json_name)
-raw <- jsonlite::fromJSON(con, simplifyDataFrame = TRUE, simplifyVector = TRUE,
-                          flatten = FALSE)
-message("JSON loaded successfully.")
-
-# ── 4. Flatten nested sections ────────────────────────────────────────────────
-# The top-level JSON is an array of parcel objects.  Each parcel contains nested
+# ── 4. Stream each nested section from the ZIP via jq ─────────────────────────
+# The TCAD JSON is a top-level array of parcel objects.  Each parcel has nested
 # arrays for owners, situses, propertyProfile, and propertyCharacteristics.
-# fromJSON returns these as list columns; bind_rows collapses them to flat tables.
+#
+# For each section we build a shell pipeline:
+#   unzip -p <zip> <json> | jq -c '<filter>'
+# jq expands the nested array into one NDJSON object per row and attaches the
+# parent parcel's pID.  jsonlite::stream_in() reads the NDJSON output PAGE_SIZE
+# rows at a time, so the peak in-process memory is roughly:
+#   PAGE_SIZE * <columns> * <bytes/value>  ≈  a few MB per page.
 
-prefix_rename <- function(lst, prefix) {
-  # Collapse a list-of-data-frames into one data frame, then prefix all column
-  # names except "pID" (which becomes "<prefix>_pID").
-  df <- dplyr::bind_rows(lst)
+ALLOWED_SECTIONS <- c("owners", "situses", "propertyProfile",
+                      "propertyCharacteristics")
+
+stream_section <- function(zip_path, json_name, section, prefix,
+                           page_size = PAGE_SIZE) {
+  # Whitelist the section name to prevent command injection.
+  if (!section %in% ALLOWED_SECTIONS) {
+    stop("Unknown section: ", section,
+         "\n  Must be one of: ", paste(ALLOWED_SECTIONS, collapse = ", "))
+  }
+
+  # jq filter: for each parcel, expand the nested array and attach pID.
+  jq_filter <- sprintf(
+    '.[] | . as $p | (.%s // []) | .[] | . + {pID: $p.pID}',
+    section
+  )
+  cmd <- sprintf(
+    "unzip -p %s %s | jq -c %s",
+    shQuote(zip_path),
+    shQuote(json_name),
+    shQuote(jq_filter)
+  )
+
+  message("  Streaming section '", section, "' ...")
+  con    <- pipe(cmd, open = "r")
+  on.exit(close(con), add = TRUE)   # always close even if stream_in() errors
+
+  chunks  <- list()
+  n_pages <- 0L
+  jsonlite::stream_in(
+    con,
+    handler = function(page) {
+      n_pages <<- n_pages + 1L
+      chunks[[n_pages]] <<- page   # pre-index avoids repeated length() calls
+    },
+    pagesize = page_size,
+    verbose  = FALSE
+  )
+
+  df <- dplyr::bind_rows(chunks)
   if (nrow(df) == 0L) return(df)
-  names(df) <- ifelse(names(df) == "pID",
-                      paste0(prefix, "_pID"),
-                      paste0(prefix, "_", names(df)))
+
+  # Prefix all column names; keep pID as <prefix>_pID for later joins.
+  names(df) <- ifelse(
+    names(df) == "pID",
+    paste0(prefix, "_pID"),
+    paste0(prefix, "_", names(df))
+  )
   df
 }
 
-message("Extracting: owners ...")
-owners_df <- prefix_rename(raw$owners,                 "owner")
-message("Extracting: situses ...")
-situs_df  <- prefix_rename(raw$situses,                "situs")
-message("Extracting: propertyProfile ...")
-prof_df   <- prefix_rename(raw$propertyProfile,        "propertyProf")
-message("Extracting: propertyCharacteristics ...")
-char_df   <- prefix_rename(raw$propertyCharacteristics, "propertyChar")
-
-rm(raw)           # release memory as soon as possible
+message("Streaming parcel sections from ZIP ...")
+owners_df <- stream_section(zip_path, json_name, "owners",                  "owner")
+situs_df  <- stream_section(zip_path, json_name, "situses",                 "situs")
+prof_df   <- stream_section(zip_path, json_name, "propertyProfile",         "propertyProf")
+char_df   <- stream_section(zip_path, json_name, "propertyCharacteristics", "propertyChar")
 gc()
 
 # ── 5. Clean and build address strings ────────────────────────────────────────
