@@ -132,17 +132,19 @@ stream_section <- function(zip_path, json_name, section, prefix,
   }
 
   # jq filter: for each parcel, expand the nested array and attach pID.
-  jq_filter <- sprintf(
-    '.[] | . as $p | (.%s // []) | .[] | . + {pID: $p.pID}',
-    section
-  )
+  jq_filter_1 <- "fromstream(1|truncate_stream(inputs))"
+  jq_filter_2 <- sprintf(
+  'if has("%s") then .pID as $pid | (.%s // [])[] | . + {pID: $pid} else empty end',
+  section, section
+)
   cmd <- sprintf(
-    "unzip -p %s %s | jq -c %s",
+    "unzip -p %s %s | jq -cn --stream %s | jq -c %s",
     shQuote(zip_path),
     shQuote(json_name),
-    shQuote(jq_filter)
+    shQuote(jq_filter_1),
+    shQuote(jq_filter_2)
   )
-
+  
   message("  Streaming section '", section, "' ...")
   con    <- pipe(cmd, open = "r")
   on.exit(close(con), add = TRUE)   # always close even if stream_in() errors
@@ -154,6 +156,8 @@ stream_section <- function(zip_path, json_name, section, prefix,
     handler = function(page) {
       n_pages <<- n_pages + 1L
       chunks[[n_pages]] <<- page   # pre-index avoids repeated length() calls
+      message("  Page ", n_pages, " — ", format(n_pages * page_size, big.mark = ","), " rows processed")
+
     },
     pagesize = page_size,
     verbose  = FALSE
@@ -177,6 +181,13 @@ situs_df  <- stream_section(zip_path, json_name, "situses",                 "sit
 prof_df   <- stream_section(zip_path, json_name, "propertyProfile",         "propertyProf")
 char_df   <- stream_section(zip_path, json_name, "propertyCharacteristics", "propertyChar")
 gc()
+
+# Write the results to .csvs so that we avoid having to re-run the streaming extraction while developing 
+# the rest of the script.
+readr::write_csv(owners_df, "output/owners.csv")
+readr::write_csv(situs_df, "output/situses.csv")
+readr::write_csv(prof_df, "output/property_profile.csv")
+readr::write_csv(char_df, "output/property_characteristics.csv")
 
 # ── 5. Clean and build address strings ────────────────────────────────────────
 # Mirrors the address_clean() logic in target_helper_functions.R.
@@ -286,22 +297,23 @@ parcels$is_owner_occupied <- addr_match | has_hs
 # original target_helper_functions.R.
 
 financial_markers <- paste(
-  # Formal entity type markers
-  "LTD", "L T D", "L\\.?T\\.?D\\.?",
-  "LLC", "L L C", "L\\.?L\\.?C\\.?",
-  "LP",  "L P",   "L\\.?P\\.?",
-  "LLLP","L L L P","L\\.?L\\.?L\\.?P\\.?",
-  "INC", "I N C", "I\\.?N\\.?C\\.?",
-  "LC",  "L C",   "L\\.?C\\.?",
-  # Real-estate / corporate sector keywords
-  "MORTG", "RENT",    "MARKET",  "INVEST",   "PROP",
-  "MANAGE","MGT",     "MGMT",    "ASSET",    "JOINT",
-  "VENTURE","VNT",    "LIMIT",   "PARTN",    "PRTN",
-  "BANK",  "ASSOC",   "EQUIT",   "REALT",    "OWNER",
-  "HOLDING","DEVELOP","COMP",    "CORP",     "AQUISI",
-  "CONDO", "C/O",
-  "[[:digit:]]",  # entities with numbers in their name (e.g. "123 HOLDINGS LLC")
-  "BORROWER", "FOUNDA",
+  # Formal entity type markers — require word boundaries to avoid false matches
+  "\\bLTD\\b", "\\bL T D\\b", "\\bL\\.?T\\.?D\\.?\\b",
+  "\\bLLC\\b", "\\bL L C\\b", "\\bL\\.?L\\.?C\\.?\\b",
+  "\\bLP\\b",  "\\bL P\\b",   "\\bL\\.?P\\.?\\b",
+  "\\bLLLP\\b","\\bL L L P\\b","\\bL\\.?L\\.?L\\.?P\\.?\\b",
+  "\\bINC\\b", "\\bI N C\\b", "\\bI\\.?N\\.?C\\.?\\b",
+  "\\bLC\\b",  "\\bL C\\b",   "\\bL\\.?C\\.?\\b",
+  # Real-estate / corporate sector keywords — longer stems are less ambiguous
+  # but still benefit from left word boundary
+  "\\bMORTG", "\\bRENT\\b",   "\\bMARKET\\b", "\\bINVEST",  "\\bPROP\\b",
+  "\\bMANAGE","\\bMGT\\b",    "\\bMGMT\\b",   "\\bASSET",   "\\bJOINT\\b",
+  "\\bVENTURE","\\bVNT\\b",   "\\bLIMIT",     "\\bPARTN",   "\\bPRTN\\b",
+  "\\bBANK\\b","\\bASSOC",    "\\bEQUIT",     "\\bREALT",   "\\bOWNER\\b",
+  "\\bHOLDING","\\bDEVELOP",  "\\bCOMP\\b",   "\\bCORP\\b", "\\bAQUISI",
+  "\\bCONDO\\b","\\bC/O\\b",
+  "[[:digit:]]",
+  "\\bBORROWER\\b", "\\bFOUNDA",
   sep = "|"
 )
 
@@ -364,7 +376,8 @@ output_cols <- intersect(output_cols, names(parcels))
 corporate_parcels <- parcels |>
   dplyr::filter(is_target) |>
   dplyr::select(all_of(output_cols)) |>
-  dplyr::rename(parcel_id = situs_pID)
+  dplyr::rename(parcel_id = situs_pID) |>
+  distinct()
 
 message("Writing ", nrow(corporate_parcels), " rows to: ", out_path)
 readr::write_csv(corporate_parcels, out_path)
