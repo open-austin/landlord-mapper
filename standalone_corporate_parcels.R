@@ -25,7 +25,7 @@
 #       Linux:  sudo apt-get install jq
 #
 # R packages (installed automatically if missing):
-#   rvest, dplyr, jsonlite, readr
+#   rvest, dplyr, jsonlite, readr, sf, tigris
 #
 # Memory note
 # -----------
@@ -40,7 +40,7 @@
 
 # ── 0. Install / load required packages ──────────────────────────────────────
 
-required_pkgs <- c("rvest", "dplyr", "jsonlite", "readr")
+required_pkgs <- c("rvest", "dplyr", "jsonlite", "readr", "sf", "tigris")
 missing_pkgs  <- required_pkgs[!required_pkgs %in% installed.packages()[, "Package"]]
 if (length(missing_pkgs)) {
   message("Installing missing packages: ", paste(missing_pkgs, collapse = ", "))
@@ -51,6 +51,8 @@ library(rvest)
 library(dplyr)
 library(jsonlite)
 library(readr)
+library(sf)
+library(tigris)
 
 # Check for jq (required for low-memory streaming extraction)
 if (nchar(Sys.which("jq")) == 0L) {
@@ -69,6 +71,8 @@ options(timeout = 7200)  # allow up to 2 hours for large downloads
 zip_path  <- "tcad_special_export.zip"   # where to save / look for the ZIP
 out_path  <- "corporate_owned_parcels.csv"
 PAGE_SIZE <- 10000L   # rows per page passed to stream_in() — tune down if RAM is tight
+
+options(tigris_use_cache = TRUE)  # cache tigris downloads between runs
 
 # ── 2. Download TCAD data ─────────────────────────────────────────────────────
 # Scrapes traviscad.org/publicinformation for the latest "Special Export (JSON)"
@@ -180,6 +184,52 @@ owners_df <- stream_section(zip_path, json_name, "owners",                  "own
 situs_df  <- stream_section(zip_path, json_name, "situses",                 "situs")
 prof_df   <- stream_section(zip_path, json_name, "propertyProfile",         "propertyProf")
 char_df   <- stream_section(zip_path, json_name, "propertyCharacteristics", "propertyChar")
+
+# ── 4b. Stream parcel-level latitude / longitude ───────────────────────────
+# TCAD stores geographic coordinates at the top level of each parcel object
+# (fields: lat, lon).  These are NOT nested inside a sub-array, so we use a
+# simpler jq filter that selects each parcel and emits only {pID, lat, lon}.
+
+stream_parcel_coords <- function(zip_path, json_name, page_size = PAGE_SIZE) {
+  # Reconstruct each top-level parcel object from the streaming jq input, then
+  # select only the coordinate fields.  Parcels with no coordinate data will
+  # have null values which become NA in R.
+  jq_filter_1 <- "fromstream(1|truncate_stream(inputs))"
+  jq_filter_2  <- 'select(has("pID")) | {pID: .pID, lat: (.lat // null), lon: (.lon // null)}'
+
+  cmd <- sprintf(
+    "unzip -p %s %s | jq -cn --stream %s | jq -c %s",
+    shQuote(zip_path),
+    shQuote(json_name),
+    shQuote(jq_filter_1),
+    shQuote(jq_filter_2)
+  )
+
+  message("  Streaming parcel coordinates ...")
+  con    <- pipe(cmd, open = "r")
+  on.exit(close(con), add = TRUE)
+
+  chunks  <- list()
+  n_pages <- 0L
+  jsonlite::stream_in(
+    con,
+    handler = function(page) {
+      n_pages <<- n_pages + 1L
+      chunks[[n_pages]] <<- page
+      message("  Page ", n_pages, " — ",
+              format(n_pages * page_size, big.mark = ","), " rows processed")
+    },
+    pagesize = page_size,
+    verbose  = FALSE
+  )
+
+  df <- dplyr::bind_rows(chunks)
+  if (nrow(df) == 0L) return(df)
+  names(df)[names(df) == "pID"] <- "coord_pID"
+  df
+}
+
+coords_df <- stream_parcel_coords(zip_path, json_name)
 gc()
 
 # Write the results to .csvs so that we avoid having to re-run the streaming extraction while developing 
@@ -188,6 +238,7 @@ readr::write_csv(owners_df, "output/owners.csv")
 readr::write_csv(situs_df, "output/situses.csv")
 readr::write_csv(prof_df, "output/property_profile.csv")
 readr::write_csv(char_df, "output/property_characteristics.csv")
+readr::write_csv(coords_df, "output/coords.csv")
 
 # ── 5. Clean and build address strings ────────────────────────────────────────
 # Mirrors the address_clean() logic in target_helper_functions.R.
@@ -248,11 +299,12 @@ owners_df$owner_name <- gsub(
 
 message("Merging parcel sections ...")
 parcels <- situs_df |>
-  dplyr::left_join(char_df,   by = c("situs_pID" = "propertyChar_pID")) |>
-  dplyr::left_join(owners_df, by = c("situs_pID" = "owner_pID"))        |>
-  dplyr::left_join(prof_df,   by = c("situs_pID" = "propertyProf_pID"))
+  dplyr::left_join(char_df,    by = c("situs_pID" = "propertyChar_pID")) |>
+  dplyr::left_join(owners_df,  by = c("situs_pID" = "owner_pID"))        |>
+  dplyr::left_join(prof_df,    by = c("situs_pID" = "propertyProf_pID")) |>
+  dplyr::left_join(coords_df,  by = c("situs_pID" = "coord_pID"))
 
-rm(situs_df, char_df, owners_df, prof_df)
+rm(situs_df, char_df, owners_df, prof_df, coords_df)
 gc()
 
 # ── 7. Classify parcels ───────────────────────────────────────────────────────
@@ -366,6 +418,7 @@ output_cols <- c(
   "propertyProf_imprvStateCd", "propertyProf_landStateCd",
   "propertyProf_imprvTotalArea", "propertyProf_imprvActualYearBuilt",
   "property_units",
+  "lat", "lon",
   "is_residential", "is_owner_occupied", "is_financialized", "is_target"
 )
 
@@ -378,6 +431,52 @@ corporate_parcels <- parcels |>
   dplyr::select(all_of(output_cols)) |>
   dplyr::rename(parcel_id = situs_pID) |>
   distinct()
+
+# ── 9b. Filter to parcels within the City of Austin boundary ──────────────
+# Uses the tigris package to download the Census Places boundary for Austin,
+# TX and performs a spatial intersection.  Parcels that have no coordinates
+# (lat / lon are NA) are excluded from the spatial filter and dropped.
+
+message("Fetching City of Austin boundary from the Census Bureau (via tigris) ...")
+austin_boundary <- tigris::places(state = "TX", cb = TRUE, year = 2023) |>
+  dplyr::filter(NAME == "Austin") |>
+  sf::st_transform(4326)
+
+# Build sf point layer from parcels that have valid coordinates.
+has_coords <- !is.na(corporate_parcels$lat) & !is.na(corporate_parcels$lon)
+
+if (sum(has_coords) == 0L) {
+  warning(
+    "No parcels have lat/lon coordinates — Austin boundary filter skipped.\n",
+    "  Check that the TCAD JSON export contains top-level 'lat'/'lon' fields."
+  )
+} else {
+  message(
+    "  ", format(sum(has_coords), big.mark = ","),
+    " of ", format(nrow(corporate_parcels), big.mark = ","),
+    " parcels have coordinates and will be spatially filtered."
+  )
+
+  parcels_sf <- sf::st_as_sf(
+    corporate_parcels[has_coords, ],
+    coords = c("lon", "lat"),
+    crs    = 4326,
+    remove = FALSE   # keep lat/lon columns in the data frame
+  )
+
+  # Intersect with Austin boundary.
+  in_austin <- lengths(sf::st_intersects(parcels_sf, austin_boundary)) > 0L
+
+  # Replace corporate_parcels with only those inside Austin.
+  n_before <- nrow(corporate_parcels)
+  corporate_parcels <- sf::st_drop_geometry(parcels_sf[in_austin, ])
+  n_after  <- nrow(corporate_parcels)
+  message(
+    "  Retained ", format(n_after, big.mark = ","),
+    " parcels inside Austin city limits (",
+    format(n_before - n_after, big.mark = ","), " outside / no coords dropped)."
+  )
+}
 
 message("Writing ", nrow(corporate_parcels), " rows to: ", out_path)
 readr::write_csv(corporate_parcels, out_path)
