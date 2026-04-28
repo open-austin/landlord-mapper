@@ -174,3 +174,67 @@ The app expects `owners_info_total.csv` and `owners_info_d3graph.rds` to be pres
 | `situs_lat` / `situs_long` | Geocoded coordinates (Census geocoder) |
 | `HHI_score` / `HHI_rank` | Housing Hardship Index for the parcel's ZIP code |
 | `rpl_themes` | Overall Social Vulnerability Index percentile rank |
+
+---
+
+## Standalone script: `standalone_corporate_parcels.R`
+
+For users who want to produce a filtered dataset of likely corporate-owned parcels without running the full `targets` pipeline, `standalone_corporate_parcels.R` provides a self-contained alternative. It requires only R, `jq` (a command-line JSON processor), and the TCAD Special Export ZIP file.
+
+### TCAD Special Export structure
+
+The TCAD Special Export is a large JSON file (several GB uncompressed) distributed as a ZIP archive from [traviscad.org/publicinformation](https://traviscad.org/publicinformation). It contains a top-level JSON array where each element represents a single tax account (parcel). Each parcel object has:
+
+- **Top-level scalar fields** — `pID` (parcel ID), `propType`, `inactive`, `geometry` (see below), and others.
+- **Nested arrays** — `owners`, `situses`, `propertyProfile`, `propertyCharacteristics`, `deeds`, `taxingunits`, `valuations`, `sales`, `permits`, `appeals`, and more.
+
+Because the file is too large to load into memory wholesale, the script uses a streaming approach: `jq` is invoked via shell pipelines to expand each nested section into newline-delimited JSON (NDJSON), which `jsonlite::stream_in()` then reads page-by-page (`PAGE_SIZE` rows at a time). Peak memory usage is roughly proportional to a single page, not the full file.
+
+### Parcel geometry and coordinates
+
+Each parcel object contains a `geometry` field holding a **JSON-encoded string** of the form `"[lat, lon]"` — for example, `"[30.2545186553, -97.7620645363]"`. This must be parsed with `jq`'s `fromjson` filter before the coordinate values can be extracted:
+
+```jq
+(try (.geometry | fromjson) catch null) as $g
+| {
+    pID: .pID,
+    lat: (if ($g|type)=="array" then ($g[0] // null) else null end),
+    lon: (if ($g|type)=="array" then ($g[1] // null) else null end)
+  }
+```
+
+Approximately 22% of parcel records have `geometry = "[null, null]"` — these are predominantly **condominium units**. Individual condo units are separate tax accounts but share a single physical parcel polygon with their sibling units. To recover coordinates for these records, the script also extracts `geoID` from `propertyIdentification[0]` and then propagates valid coordinates from any sibling unit that does have geometry:
+
+```r
+geoid_lookup <- coords_df |>
+  filter(!is.na(lat), !is.na(lon), !is.na(geoID)) |>
+  distinct(geoID, .keep_all = TRUE) |>
+  select(geoID, lat_fill = lat, lon_fill = lon)
+
+coords_df <- coords_df |>
+  left_join(geoid_lookup, by = "geoID") |>
+  mutate(
+    lat = dplyr::coalesce(lat, lat_fill),
+    lon = dplyr::coalesce(lon, lon_fill)
+  ) |>
+  select(-lat_fill, -lon_fill)
+```
+
+### Identifying corporate ownership
+
+The script classifies each parcel along three dimensions:
+
+1. **Residential** — improvement or land state code begins with `A` (single-family) or `B` (multi-family), or the zoning code contains `SF` or `MF`.
+
+2. **Owner-occupied** — the owner's mailing address matches the situs (property) address, or a homestead exemption (`HS`) is present. Address matching uses the `clean_address()` function, which normalises street type abbreviations, removes punctuation, and strips unit designators before comparison.
+
+3. **Financialized / corporate-owned** — the owner name is matched against a regular expression covering:
+   - Formal entity suffixes: `LLC`, `LP`, `LTD`, `INC`, `LC`, `LLLP` (including spaced and punctuated variants)
+   - Real-estate sector keywords: `INVEST`, `MANAGE`, `HOLDING`, `DEVELOP`, `REALT`, `ASSET`, `EQUITY`, `PARTNER`, `VENTURE`, and others
+   - Numeric characters in the owner name (a proxy for numbered holding companies)
+
+A parcel is flagged as `is_target = TRUE` when it is **residential**, **not owner-occupied**, and **financialized**. These are the records most likely to represent corporate landlord activity.
+
+The script then spatially filters results to the City of Austin boundary using the Census Bureau's Places layer (via the `tigris` package) and writes the final dataset to `corporate_owned_parcels.csv`.
+
+---
