@@ -18,6 +18,7 @@ situs_state = list()
 situs_zip = list()
 situs_country = list()
 situs_international = list()
+
 owner_year = list()
 owner_ID = list()
 owner_name = list()
@@ -32,8 +33,19 @@ owner_addrInternational = list()
 owner_ownerPct = list()
 owner_exemptions = list()
 owner_pID = list()
-propertyChar_year =list()
+owner_pAccountID = list()
 
+propAgent_pAccountID = list()
+propAgent_agentID = list()
+propAgent_pAccountAgentID = list()
+propAgent_companyName = list()
+propAgent_effectiveDt = list()
+
+ownerValue_pAccountID = list()
+ownerValue_marketValue = list()
+ownerValue_assessedValue = list()
+
+propertyChar_year =list()
 propertyChar_marketArea = list()
 propertyChar_region = list()
 propertyChar_zoning = list()
@@ -67,6 +79,10 @@ propertyProf_fieldInsDt = list()
 propertyProf_landHomesitePct = list()
 propertyProf_mobileHomeNumbers = list()
 
+
+propertyLegal_pID = list()
+propertyLegal_legalDesc = list()
+
 def propChar_add(key, value):
   if(key=='pID'):
     if(value is None):
@@ -81,8 +97,62 @@ def propChar_add(key, value):
               
       propertyChar_zoning.append(value)
   
+def propLegal_add(key,value):
+  if(key=='pID'):
+    if(value is None):
+      propertyLegal_pID.append('NA')
+    else:
+      propertyLegal_pID.append(value)
+  if(key=='legalDescription'):
+    if(value is None):
+      propertyLegal_legalDesc.append('NA')
+    else:
+      propertyLegal_legalDesc.append(value)
+    
+def propAgent_add(key,value):
+  if(key=='pAccountID'):
+    if(value is None):
+      propAgent_pAccountID.append('NA')
+    else:
+       propAgent_pAccountID.append(value)
+  if(key=='agentID'):
+    if(value is None):
+      propAgent_agentID.append('NA')
+    else:
+       propAgent_agentID.append(value)
+  if(key=='propertyAccountAgentID'):
+    if(value is None):
+      propAgent_pAccountAgentID.append('NA')
+    else:
+       propAgent_pAccountAgentID.append(value)
+  if(key=='companyName'):
+    if(value is None):
+      propAgent_companyName.append('NA')
+    else:
+       propAgent_companyName.append(value)
+  if(key=='effectiveDt'):
+    if(value is None):
+      propAgent_effectiveDt.append('NA')
+    else:
+       propAgent_effectiveDt.append(value)
 
-
+def ownerValue_add(key,value):
+  if(key=='pAccountID'):
+    if(value is None):
+      ownerValue_pAccountID.append('NA')
+    else:
+       ownerValue_pAccountID.append(value)
+  if(key=='ownerMarketValue'):
+    if(value is None):
+      ownerValue_marketValue.append('NA')
+    else:
+       ownerValue_marketValue.append(value)
+  if(key=='ownerAppraisedValue'):
+    if(value is None):
+      ownerValue_assessedValue.append('NA')
+    else:
+       ownerValue_assessedValue.append(value)
+  
 def propProf_add(key,value):
   if(key=='pID'):
     if(value is None):
@@ -192,11 +262,17 @@ def ownerChar_add(key,value):
       owner_ID.append('NA')
     else:
       owner_ID.append(value)
+      
   if(key=='pID'):
     if(value is None):
       owner_pID.append('NA')
     else:
       owner_pID.append(value)
+  if(key=='pAccountID'):
+    if(value is None):
+      owner_pAccountID.append('NA')
+    else:
+      owner_pAccountID.append(value)
   if(key=='ownerPct'):
     if(value is None):
       owner_ownerPct.append('NA')
@@ -252,9 +328,12 @@ def ownerChar_add(key,value):
       owner_exemptions.append('NA')
     else:
       owner_exemptions.append(value)
+    
 
 
 def deedChar_add(key,value):
+  # print(key)
+  # print(value)
   if(key=='pID'):
     if(value is None):
       deeds_pID.append('NA')
@@ -283,18 +362,18 @@ def deedChar_add(key,value):
           
   
 # if __name__ == "__main__":
-def TCAD_parseYear(TCAD_special_export_file_name= "TCAD_special_export.zip",year = 2025):
-  
+def TCAD_parseYear_propProf(TCAD_special_export_file_name= "TCAD_special_export.zip",year = 2026):
   
   with zipfile.ZipFile(TCAD_special_export_file_name,'r') as austin_parcel_data_zip:
     parcel_file_name = austin_parcel_data_zip.namelist()[0]
-    print('profile')
+    # print('profile')
     # propertyProf_yearLenOld = len(propertyProf_pID)
     with austin_parcel_data_zip.open(parcel_file_name) as austin_parcel_data:
       parser = ijson.parse(austin_parcel_data)
       propProf = ijson.kvitems(parser, 'item.propertyProfile.item')
       for key, value in propProf:
         propProf_add(key,value)
+    
     # propertyProf_yearLen = len(propertyProf_pID)-propertyProf_yearLenOld
     # propertyProf_year.append(np.repeat(str(year),propertyProf_yearLen,axis=0))
 
@@ -311,12 +390,31 @@ def TCAD_parseYear(TCAD_special_export_file_name= "TCAD_special_export.zip",year
                                   'propertyProf_imprvEffYearBuilt':propertyProf_imprvEffYearBuilt
                                   }
                                   )
-
     propertyProf_data.to_csv('austin_propertyProf_data.csv')
-  #
+
+def TCAD_parseYear_legal(TCAD_special_export_file_name= "TCAD_special_export.zip",year = 2026):
   with zipfile.ZipFile(TCAD_special_export_file_name,'r') as austin_parcel_data_zip:
     parcel_file_name = austin_parcel_data_zip.namelist()[0]
-    print('situs')
+    # print('legal')
+    # propertyProf_yearLenOld = len(propertyProf_pID)
+    with austin_parcel_data_zip.open(parcel_file_name) as austin_parcel_data:
+      parser = ijson.parse(austin_parcel_data)
+      propLegal = ijson.kvitems(parser, 'item.propertyLegalDescription.item')
+      for key, value in propLegal:
+        propLegal_add(key,value)
+    
+    propertyLegal_data = pd.DataFrame({'propertyLegal_year':year,
+                                      'propertyLegal_pID':propertyLegal_pID,
+                                      'propertyLegal_legalDesc': propertyLegal_legalDesc
+                                  }
+                                  )
+
+    propertyLegal_data.to_csv('austin_propertyLegal_data.csv')
+  #
+def TCAD_parseYear_situs(TCAD_special_export_file_name= "TCAD_special_export.zip",year = 2026):
+  with zipfile.ZipFile(TCAD_special_export_file_name,'r') as austin_parcel_data_zip:
+    parcel_file_name = austin_parcel_data_zip.namelist()[0]
+    # print('situs')
     # situs_yearLenOld = len(situs_pID)
     with austin_parcel_data_zip.open(parcel_file_name) as austin_parcel_data:
       parser = ijson.parse(austin_parcel_data)
@@ -333,50 +431,102 @@ def TCAD_parseYear(TCAD_special_export_file_name= "TCAD_special_export.zip",year
                                   'situs_streetSuffix': situs_streetSuffix,
                                   'situs_city': situs_city,
                                   'situs_state': situs_state,
-                                  'situs_zip': situs_zip,
-                                  'situs_country': situs_country,
-                                  'situs_international': situs_international})
-
+                                  'situs_zip': situs_zip
+                                  # 'situs_country': situs_country
+                                  # 'situs_international': situs_international
+                                  })
     situs_data.to_csv('austin_situs_data.csv')
 
+
+def TCAD_parseYear_owner(TCAD_special_export_file_name= "TCAD_special_export.zip",year = 2026):
   with zipfile.ZipFile(TCAD_special_export_file_name,'r') as austin_parcel_data_zip:
     parcel_file_name = austin_parcel_data_zip.namelist()[0]
-    print('owner')
+    # print(parcel_file_name)
     # owner_yearLenOld = len(owner_pID)
     with austin_parcel_data_zip.open(parcel_file_name) as austin_parcel_data:
       parser = ijson.parse(austin_parcel_data)
+      # print(parser)
       ownerChars = ijson.kvitems(parser, 'item.owners.item')
-      for key, value in ownerChars:
-        ownerChar_add(key, value)
-    # owner_yearLen = len(owner_pID)-owner_yearLenOld
-    # owner_year.append(np.repeat(str(year),owner_yearLen,axis=0))
-    owner_data =  pd.DataFrame({'owner_year':year,
-                              'owner_ID': owner_ID,
-                                  'owner_pID': owner_pID,
-                                  'owner_ownerPct':owner_ownerPct,
-                                  'owner_name': owner_name,
-                                  'owner_nameSecondary': owner_nameSecondary,
-                                  'owner_addrDeliveryLine': owner_addrDeliveryLine,
-                                  'owner_addrUnitDesignator': owner_addrUnitDesignator,
-                                  'owner_addrCity': owner_addrCity,
-                                  'owner_addrZip': owner_addrZip,
-                                  'owner_addrState': owner_addrState,
-                                  'owner_addrCountry': owner_addrCountry,
-                                  'owner_addrInternational': owner_addrInternational,
-                                  'owner_exemptions':owner_exemptions
-                                  }
-                                  )
+      # print(ownerChars)
 
+      for key, value in ownerChars:
+        # print('1')
+        ownerChar_add(key, value)
+      # owner_yearLen = len(owner_pID)-owner_yearLenOld
+      # owner_year.append(np.repeat(str(year),owner_yearLen,axis=0))
+    owner_data =  pd.DataFrame({'owner_year':year,
+                                'owner_ID': owner_ID,
+                                    'owner_pID': owner_pID,
+                                    'owner_pAccountID':owner_pAccountID,
+                                    'owner_ownerPct':owner_ownerPct,
+                                    'owner_name': owner_name,
+                                    'owner_nameSecondary': owner_nameSecondary,
+                                    'owner_addrDeliveryLine': owner_addrDeliveryLine,
+                                    'owner_addrUnitDesignator': owner_addrUnitDesignator,
+                                    'owner_addrCity': owner_addrCity,
+                                    'owner_addrZip': owner_addrZip,
+                                    'owner_addrState': owner_addrState,
+                                    'owner_addrCountry': owner_addrCountry,
+                                    'owner_addrInternational': owner_addrInternational,
+                                    'owner_exemptions':owner_exemptions
+                                    }
+                                    )
     owner_data.to_csv('austin_owner_data.csv')
 
+  
+def TCAD_parseYear_agent(TCAD_special_export_file_name= "TCAD_special_export.zip",year = 2026):
   with zipfile.ZipFile(TCAD_special_export_file_name,'r') as austin_parcel_data_zip:
     parcel_file_name = austin_parcel_data_zip.namelist()[0]
-    print('propChar')
+    # print('agent')
+    # owner_yearLenOld = len(owner_pID)
+    with austin_parcel_data_zip.open(parcel_file_name) as austin_parcel_data:
+      parser = ijson.parse(austin_parcel_data)
+      agentChars = ijson.kvitems(parser, 'item.owners.item.agents.item')
+      for key, value in agentChars:
+        propAgent_add(key, value)
+    # owner_yearLen = len(owner_pID)-owner_yearLenOld
+    # owner_year.append(np.repeat(str(year),owner_yearLen,axis=0))
+    agent_data =  pd.DataFrame({'agent_year':year,
+                                  'agent_pAccountID': propAgent_pAccountID,
+                                  'agent_pID': propAgent_agentID,
+                                  'agent_pAccountAgentID':propAgent_pAccountAgentID,
+                                  'companyName':propAgent_companyName,
+                                  'effectiveDt':propAgent_effectiveDt
+                                  }
+                                  )
+    agent_data.to_csv('austin_agent_data.csv')
+  # 
+def TCAD_parseYear_ownerValue(TCAD_special_export_file_name= "TCAD_special_export.zip",year = 2026):
+  with zipfile.ZipFile(TCAD_special_export_file_name,'r') as austin_parcel_data_zip:
+    parcel_file_name = austin_parcel_data_zip.namelist()[0]
+    # print('ownerValue')
+    # owner_yearLenOld = len(owner_pID)
+    with austin_parcel_data_zip.open(parcel_file_name) as austin_parcel_data:
+      parser = ijson.parse(austin_parcel_data)
+      ownerValueChars = ijson.kvitems(parser, 'item.owners.item.ownerValue.item')
+      for key, value in ownerValueChars:
+        ownerValue_add(key, value)
+    # owner_yearLen = len(owner_pID)-owner_yearLenOld
+    # owner_year.append(np.repeat(str(year),owner_yearLen,axis=0))
+    ownerValue_data =  pd.DataFrame({'ownerValue_year':year,
+                                'ownerValue_pAccountID': ownerValue_pAccountID,
+                                  'ownerValue_marketValue': ownerValue_marketValue,
+                                  'ownerValue_assessedValue':ownerValue_assessedValue
+                                  }
+                                  )
+    ownerValue_data.to_csv('austin_ownerValue_data.csv')
+     
+     
+def TCAD_parseYear_propChar(TCAD_special_export_file_name= "TCAD_special_export.zip",year = 2026):
+  with zipfile.ZipFile(TCAD_special_export_file_name,'r') as austin_parcel_data_zip:
+    parcel_file_name = austin_parcel_data_zip.namelist()[0]
+    # print('propChar')
     # propertyChar_yearLenOld = len(propertyChar_pID)
     with austin_parcel_data_zip.open(parcel_file_name) as austin_parcel_data:
       parser = ijson.parse(austin_parcel_data)
       propChar = ijson.kvitems(parser, 'item.propertyCharacteristics.item')
       for key, value in propChar:
+        # print(key)
         propChar_add(key,value)
     # propertyChar_yearLen = len(propertyChar_pID)-propertyChar_yearLenOld
     # propertyChar_year.append(np.repeat(str(year),propertyChar_yearLen,axis=0))
@@ -385,9 +535,9 @@ def TCAD_parseYear(TCAD_special_export_file_name= "TCAD_special_export.zip",year
                                       'propertyChar_pID':propertyChar_pID,
 
                                   'propertyChar_zoning': propertyChar_zoning})
-
     propertyChar_data.to_csv('austin_propertyChar_data.csv')
   #   
+def TCAD_parseYear_deeds(TCAD_special_export_file_name= "TCAD_special_export.zip",year = 2026):
   with zipfile.ZipFile(TCAD_special_export_file_name,'r') as austin_parcel_data_zip:
     parcel_file_name = austin_parcel_data_zip.namelist()[0]
     print('deed')
@@ -399,19 +549,13 @@ def TCAD_parseYear(TCAD_special_export_file_name= "TCAD_special_export.zip",year
         deedChar_add(key,value)
     # deeds_yearLen = len(deeds_pID)-deeds_yearLenOld
     # deeds_year.append(np.repeat(str(year),deeds_yearLen,axis=0))
-    print(len(deeds_year))
-    print(len(deeds_pID))
     # print(len(deeds_buyerline))
-    print(len(deeds_sellerLine))
-    print(len(deeds_deedDt))
-    print(len(deeds_deedID))
     deeds_data = pd.DataFrame({'deeds_year':year,
                                       'deeds_pID':deeds_pID,
-                                      'deeds_buyerline': deeds_buyerLine,
-                                  'deeds_sellerLine': deeds_sellerLine,
+                                  #     'deeds_buyerline': deeds_buyerLine,
+                                  # 'deeds_sellerLine': deeds_sellerLine,
                                   'deeds_deedDt': deeds_deedDt,
                                   'deeds_deedID':deeds_deedID})
-    
     deeds_data.to_csv('austin_deeds_data.csv')
     
     
