@@ -2,8 +2,11 @@
 # Follow the comments below to fill in this target script.
 # Then follow the manual to check and run the pipeline:
 #   https://books.ropensci.org/targets/walkthrough.html#inspect-the-pipeline
+# base_path = "tcad_special_export.zip"
+# file_name = 'Travis-protaxExport-20260407.json'
+# tail(readLines(unz(base_path,
+#                    file_name)),100)
 
-options(timeout = max(7200, getOption("timeout")))
 # Load packages required to define the pipeline:
 library(targets)
 library(tarchetypes) # Load other packages as needed.
@@ -21,16 +24,21 @@ library(reticulate)
 library(stringdist)
 library(purrr)
 library(foreach)
+library(multidplyr)
 library(doRNG)
 library(readr)
 library(tidygeocoder)
 library(censusapi)
-library(acs)
+# library(acs)
+library(googleCloudStorageR)
 library(tidycensus)
 library(httr)
 library(lubridate)
 library(qs2)
 library(httr2)
+library(tidyr)
+options(future.globals.maxSize = 1.5 * 1e9)
+options(timeout = max(7200, getOption("timeout")))
 reticulate::import('pandas')
 reticulate::import('numpy')
 reticulate::import('urllib')
@@ -39,7 +47,7 @@ reticulate::import('re')
 reticulate::import('ijson.backends.yajl2_c',
                    as = 'ijson')
 reticulate::import('multiprocessing')
-
+# reticulate::source_python('pacs.py')
 reticulate::source_python('TCAD_parse.py')
 source('target_helper_functions.R')
 source('scrape_helper_functions.R')
@@ -53,10 +61,23 @@ data_links <- list(Code_Complaints = 'https://data.austintexas.gov/Public-Safety
 base_used = c('Austin_Code_Complaint_Cases',
               'Short_Term_Rental_Locations',
               'Zoning_Cases')
-Sys.setenv(CENSUS_KEY=`YOUR OWN CENSUS API KEY GOES HERE`)
+Sys.setenv(CENSUS_KEY='YOUR CENSUS API KEY HERE')
 Sys.getenv("CENSUS_KEY")
-
+#            "GCS_AUTH_FILE" = "client_secret_970494625384-1qc5cm062uj9ljhsempgh0ririra3hoi.apps.googleusercontent.com.json")
 # Set target options:
+library(googleCloudStorageR)
+library(gargle)
+
+## Fetch token. See: https://developers.google.com/identity/protocols/oauth2/scopes
+# scope <-c("https://www.googleapis.com/auth/cloud-platform")
+# token <- token_fetch(scopes = scope)
+gcs_auth(token = readRDS('token.rds'))
+
+Sys.setenv("GCS_AUTH_FILE" = "landlord-mapper-texas-triangle-72fb0e8772e1.json")
+Sys.setenv("GCS_DEFAULT_BUCKET" = "cad-data-texas-triangle")
+gcs_global_bucket("cad-data-texas-triangle")
+
+project <- "Landlord-Mapper-Texas-Triangle"
 tar_option_set(
   packages = c("tibble",
                "forecast",
@@ -73,14 +94,20 @@ tar_option_set(
                "doRNG",
                "tidygeocoder",
                "readr",
+               "tidyr",
+               "foreach",
                "censusapi",
-               "acs",
                "tidycensus",
-               "httr",
+               "httr2",
                "lubridate",
+               "multidplyr",
                "qs2"
                ), # Packages that your targets need for their tasks.
   format = "qs", # Optionally set the default storage format. qs is fast.
+  debug  = 'tcad_data',
+  # cue = tar_cue(mode = "never"),
+  garbage_collection = 1,
+  # targets::tar_make(callr_function = NULL, use_crew = FALSE, as_job = FALSE),
   #
   # Pipelines that take a long time to run may benefit from
   # optional distributed computing. To use this capability
@@ -90,9 +117,14 @@ tar_option_set(
   # sets a controller that scales up to a maximum of two workers
   # which run as local R processes. Each worker launches when there is work
   # to do and exits if 60 seconds pass with no tasks to run.
-  #
-    controller = crew::crew_controller_local(workers = 8,#parallel::detectCores(),
-    seconds_idle = 10)
+  # resources = tar_resources(gcp = tar_resources_gcp(bucket = gcs_get_global_bucket(),
+  #                                                   prefix = "Landlord-Mapper-Texas-Triangle",
+  #                                                   predefined_acl = 'bucketLevel')
+                            # ),
+  # repository = 'gcp',
+  # repository_meta = 'gcp',
+  controller = crew::crew_controller_local(workers = parallel::detectCores(),
+                                           seconds_idle = 10)
   #
   # Alternatively, if you want workers to run on a high-performance computing
   # cluster, select a controller from the {crew.cluster} package.
@@ -122,73 +154,159 @@ tar_option_set(
 # Replace the target list below with your own:
 list(
   tar_target(
-    name = tcad_data,
-    command = download_tcad_austin(),
-    # format = "qs" # Efficient storage for general data objects.
-    ),
-  tar_target(name = tcad_parse,
-             TCAD_parseYear(list.files()[grepl('zip',list.files())]),
-             deployment = 'main'
-             ),
-  tar_target(propChar_file,
-             'austin_propertyChar_data.csv',
-             format = 'file'),
-  tar_target(propProf_file,
-             'austin_propertyProf_data.csv',
-             format = 'file'),
-  tar_target(situs_file,
-             'austin_situs_data.csv',
-             format = 'file'),
-  tar_target(owner_file,
-             'austin_owner_data.csv',
-             format = 'file'),
-  tar_target(deed_file,
-             'austin_deeds_data.csv',
-             format = 'file'),
-  tar_target(propChar_data,
-             read.csv(propChar_file,
-                      row.names = 'X')),
-  tar_target(propProf_data,
-             read.csv(propProf_file,
-                      row.names = 'X')),
-  tar_target(deed_data,
-             read.csv(deed_file,
-                      row.names = 'X')),
-  tar_target(situs_data,
-             read.csv(situs_file,
-                      row.names = 'X')),
-  tar_target(owner_data,
-             read.csv(owner_file,
-                      row.names = 'X')),
-  tar_target(deed_summ_data,
-            deed_summ_data_gen(deed_data,
-                               propProf_data,
-                               propChar_data),
-            deployment = 'main'),
-  tar_target(code_complaint_data,
-             read.csv(austin_open_data_dl_shell(data_links[[1]],
-                                 base_used[[1]])),
+    name = wcad_data,
+    command = download_wcad_data(),
+    deployment = 'main'),
+  tar_target(name = wcad_data_parsed,
+             command = parse_wcad_data(wcad_data),
              deployment = 'main'),
+  tar_target(hays_data,
+             command = parse_hays_cad_data(),
+             deployment = 'main'),
+  tar_target(pacs_data,
+             command = ingest_proton_pacs_cad_data('AUSTIN–SAN ANTONIO METROPLEX (13 of 13).zip'),
+             deployment = 'main'),
+  tar_target(
+    name = tcad_data_get,
+    command = {
+      download_tcad_austin()
+      },
+    deployment = 'main'),
+  
+  tar_target(
+    name = propChar_data,
+    command = {
+      
+      print('propChar')
+      print(tcad_data_get)
+      TCAD_parseYear_propChar(list.files()[grepl('tcad_special_export.zip',
+                                                 list.files())])
+      read.csv('austin_propertyChar_data.csv',
+               row.names = 'X')
+    },
+    deployment = 'main'),
+  tar_target(
+    name = propProf_data,
+    command = {
+      
+      print('propProf')
+      print(tcad_data_get)
+      TCAD_parseYear_propProf(list.files()[grepl('tcad_special_export.zip',
+                                                         list.files())])
+      read.csv('austin_propertyProf_data.csv',
+               row.names = 'X')
+      },
+    deployment = 'main'),
+  tar_target(
+    name = legal_data,
+    command = {
+      
+      print('legal')
+      print(tcad_data_get)
+      TCAD_parseYear_legal(list.files()[grepl('tcad_special_export.zip',list.files())])
+      read.csv('austin_propertyLegal_data.csv',
+               row.names = 'X')
+      },
+    deployment = 'main'),
+  tar_target(
+    name = situs_data,
+    command = {
+      
+      print('situs')
+      print(tcad_data_get)
+      TCAD_parseYear_situs(list.files()[grepl('tcad_special_export.zip',list.files())])
+      read.csv('austin_situs_data.csv',
+               row.names = 'X')
+      },
+    deployment = 'main'
+    ),
+  tar_target(
+    name = owner_data,
+    command = {
+      
+      print('owner')
+      print(tcad_data_get)
+      TCAD_parseYear_owner(list.files()[grepl('tcad_special_export.zip',list.files())])
+      read.csv('austin_owner_data.csv',
+               row.names = 'X')
+      },
+    deployment = 'main'),
+  tar_target(
+    name = agent_data,
+    command = {
+      
+      print('agent')
+      print(tcad_data_get)
+      TCAD_parseYear_agent(list.files()[grepl('tcad_special_export.zip',list.files())])
+      read.csv('austin_agent_data.csv',
+               row.names = 'X')
+      },
+    deployment = 'main'),
+  tar_target(
+    name = ownerValue_data,
+    command = {
+      
+      print('ownerValue')
+      print(tcad_data_get)
+      TCAD_parseYear_ownerValue(list.files()[grepl('tcad_special_export.zip',
+                                                           list.files())])
+      read.csv('austin_ownerValue_data.csv',
+               row.names = 'X')
+      },
+    deployment = 'main'),
+  tar_target(
+    name = deed_data,
+    command = {
+      
+      print('deeds')
+      print(tcad_data_get)
+      
+      TCAD_parseYear_deeds(list.files()[grepl('tcad_special_export.zip',
+                                                      list.files())])
+      read.csv('austin_deeds_data.csv',
+               row.names = 'X')
+      },
+    deployment = 'main'),
+
+  tar_target(deed_summ_data,
+             command = {
+               deed_summ_data_gen(deed_data)
+               },
+            deployment = 'main'),
+  # tar_target(code_complaint_data,
+  #            read.csv(austin_open_data_dl_shell(data_links[[1]],
+  #                                base_used[[1]])),
+  #            deployment = 'main'),
   tar_target(svi_data,
              census_data_get_svi(2023),
              deployment = 'main'),
   tar_target(hhi_data,
              readxl::read_xlsx('HHI Data 2024 United States.xlsx'),
              deployment = 'main'),
-  tar_target(austin_parcel_data_merged,
-             target_property_gen(owner_data,
-                                 propChar_data,
+  tar_target(austin_parcel_data_merged_local,
+             target_property_gen(propChar_data,
                                  propProf_data,
                                  situs_data,
-                                 deed_summ_data
+                                 owner_data,
+                                 deed_summ_data,
+                                 legal_data,
+                                 agent_data,
+                                 ownerValue_data
                                  ),
              deployment = 'main'),
-  tar_target(austin_parcel_data_merged_code,
-             code_compl_merge(austin_parcel_data_merged,
-                              code_complaint_data),
+  tar_target(austin_parcel_data_merged,
+             rbind(austin_parcel_data_merged_local,
+                   pacs_data,
+                   wcad_data_parsed,
+                   hays_data
+                   ),
              deployment = 'main'),
+  # tar_target(austin_parcel_data_merged_code,
+  #            code_compl_merge(austin_parcel_data_merged,
+  #                             code_complaint_data),
+  #            deployment = 'main'),
   tar_target(austin_parcel_data_merged_owner,
-             owner_scrape_actual(austin_parcel_data_merged_code),
+             owner_scrape_actual(austin_parcel_data_merged),
              deployment = 'main'
              ),
   tar_target(situs_owner_strings,
@@ -198,10 +316,15 @@ list(
              situs_owner_string_dist_matrix(situs_owner_strings,
                                             austin_parcel_data_merged_owner),
              deployment = 'main'),
+  tar_target(situs_group_assignments_final,
+             situs_neighor_gen(situs_group_assignments,
+                               austin_parcel_data_merged_owner)
+             # skip = sum(grepl('situs_group_assignments_final',
+             #                  list.files("_targets\\objects")))>0
+             ),
 
   tar_target(owners_info_total,
-             parcel_geolocate(austin_parcel_data_merged_owner,
-                              situs_group_assignments),
+             parcel_geolocate(situs_group_assignments_final),
              deployment = 'main'
              ),
   tar_target(owners_data_total_supp,
@@ -217,4 +340,3 @@ list(
 #   penguins_data_raw = read_csv(penguins_csv_file, show_col_types = FALSE),
 #   penguins_data = clean_penguin_data(penguins_data_raw)
 # )
-
