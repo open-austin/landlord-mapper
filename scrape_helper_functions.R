@@ -27,7 +27,7 @@ financial_markers_supp <- c('MORTG',
                             'MGMT',
                             'ASSET',
                             'JOINT',
-                            'VENTURE',
+                            'VENTUR',
                             'VNT',
                             'LIMIT',
                             'PARTN',
@@ -337,7 +337,7 @@ set_name = function( name,
                      try = 1
                      ){
   if(try==1){
-    return(trimws(gsub(paste('([[:space:]]|[[:punct:]])?(?=',
+    return(trimws(gsub(paste('([[:space:]]|[[:punct:]])+(?=',
                                      financial_marker_base_string,
                                      '.*)', sep = ''),
                                ', ',
@@ -348,7 +348,7 @@ set_name = function( name,
   }
   if(try==2){
     
-    return(trimws(gsub(paste('([[:space:]]|[[:punct:]])?(?=',
+    return(trimws(gsub(paste('([[:space:]]|[[:punct:]])+(?=',
                                      financial_marker_base_string,
                                      '.*)', sep = ''),
                                ' ',
@@ -360,7 +360,7 @@ set_name = function( name,
   }
   if(try==3){
     
-    return(trimws(gsub(paste('([[:space:]]|[[:punct:]])?',
+    return(trimws(gsub(paste('([[:space:]]|[[:punct:]])+',
                                      financial_marker_base_string,
                                      sep = ''),
                                '',
@@ -1213,12 +1213,14 @@ scrape_owner_api = function(owner_name,
                         situs_address,
                         veneer_owner,
                         veneer_owner_mail_address,
-                        depth = 0,
+                        depth = 3,
                         owner_title = NA,
                         owner_mail_address = NA,
                         owner_active_year = NA,
                         business_details_table = NA){
-  
+  # print(depth)
+  # print(owner_name) 
+  # print(owner_mail_address)
   api_key = readLines('cpa_key.txt', warn = FALSE)
   # payers_response <- cpa_api_request("https://api.comptroller.texas.gov/public-data/v1/public/sales-tax-payer?searchType=legalName&BUSINESS_NAME=%s",
   #                                 owner_name,
@@ -1251,6 +1253,7 @@ scrape_owner_api = function(owner_name,
   taxId <- unlist(lapply(payers_response$data,
                                 function(entity){
                                   unlist(entity$taxpayerId)
+                                  
                                 }))[1]
   
   # print(taxId)
@@ -1259,30 +1262,35 @@ scrape_owner_api = function(owner_name,
   
   business_details_table_parse = franchise_info[[1]]
   owner_details_table_parse = franchise_info[[2]]
+  # print(owner_details_table_parse)
   if(nrow(owner_details_table_parse)==0){
-    # print('1.0')
+    # print('1')
     #no results on a recursive owner search
     if(depth>0 ){
       
       # print('1.1')
-      owner_table = data.frame(owner_name_scraped = owner_name,
+      owner_table = data.frame(owner_name = owner_name,
                                owner_title = owner_title,
-                               owner_mail_address = owner_mail_address,
+                               owner_address = owner_mail_address,
                                owner_active_year = owner_active_year)
       
       results = officer_business_bind(owner_table,
                                       business_details_table)
+      results$situs_pID <- situs_pID
+      results$situs_address <- situs_address
     }
     #no results on base owner search
     if(depth==0 ){
       # print('1.2')
-      owner_table = data.frame(owner_name_scraped = NA,
+      owner_table = data.frame(owner_name = NA,
                                owner_title = NA,
-                               owner_mail_address = NA,
+                               owner_address = NA,
                                owner_active_year = NA)
       
       results = officer_business_bind(owner_table,
                                       business_details_table_parse)
+      results$situs_pID <- situs_pID
+      results$situs_address <- situs_address
     }
     
   }
@@ -1291,79 +1299,127 @@ scrape_owner_api = function(owner_name,
     # print('2')
     finance_inds <- grepl(financial_marker_string,
                           owner_details_table_parse$owner_name)
+    # repeat_inds <- which(owner_details_table_parse$owner_name==owner_name)
     #if owner has financial markers, do a recursive search on it
-    if(sum(finance_inds)>0){
-      # print('2.1')
-      owners_fin = foreach(ind = which(finance_inds),
-                           .combine = 'rbind') %do% {
-                             fin_owner_scrape = tryCatch({
-                               scrape_owner_api( owner_details_table_parse$owner_name[ind],
-                                             situs_pID = situs_pID , 
-                                             situs_address = situs_address,
-                                             veneer_owner = veneer_owner,
-                                             veneer_owner_mail_address = veneer_owner_mail_address,
-                                             depth = depth+1,
-                                             owner_title = owner_details_table_parse$owner_title[ind],
-                                             owner_mail_address = owner_details_table_parse$owner_mail_address[ind],
-                                             owner_active_year = owner_details_table_parse$owner_active_year,
-                                             business_details_table = business_details_table_parse )
-                             },error = function(cond){
-                               cond
-                             })
-                             
-                             if('error' %in% class(fin_owner_scrape)){
-                               # print('error')
-                               owner_fin = data.frame(owner_name = owner_details_table_parse$owner_name[ind],
-                                                      owner_title = owner_details_table_parse$owner_title[ind],
-                                                      owner_address = owner_details_table_parse$owner_mail_address[ind],
-                                                      owner_active_year = owner_details_table_parse$owner_active_year[ind]
-                                                      )
+    if(depth>=0){
+      if(sum(finance_inds)>0){
+        # print('2.1')
+        owners_fin = foreach(ind = which(finance_inds),
+                             .combine = 'rbind') %do% {
+                               fin_owner_scrape = tryCatch({
+                                 if(owner_details_table_parse$owner_name[ind]==owner_name){
+                                   owner_fin = data.frame(owner_name= owner_details_table_parse$owner_name[ind],
+                                                          owner_title = owner_details_table_parse$owner_title[ind],
+                                                          owner_address = owner_details_table_parse$owner_mail_address[ind],
+                                                          owner_active_year = owner_details_table_parse$owner_active_year[ind]
+                                                          )
+                                   officer_business_bind(owner_fin,
+                                                         business_details_table_parse)
+                                 }
+                                 else{
+                                   scrape_owner_api( owner_details_table_parse$owner_name[ind],
+                                                     situs_pID = situs_pID , 
+                                                     situs_address = situs_address,
+                                                     veneer_owner = veneer_owner,
+                                                     veneer_owner_mail_address = veneer_owner_mail_address,
+                                                     depth = depth-1,
+                                                     owner_title = owner_details_table_parse$owner_title[ind],
+                                                     owner_mail_address = owner_details_table_parse$owner_mail_address[ind],
+                                                     owner_active_year = owner_details_table_parse$owner_active_year,
+                                                     business_details_table = business_details_table_parse )
+                                 }
+                                 
+                               },error = function(cond){
+                                 cond
+                               })
                                
-                               fin_owner_scrape = officer_business_bind(owner_fin,
-                                                                        business_details_table_parse)
+                               if('error' %in% class(fin_owner_scrape)){
+                                 
+                                 # print('error')
+                                 owner_fin = data.frame(owner_name = owner_details_table_parse$owner_name[ind],
+                                                        owner_title = owner_details_table_parse$owner_title[ind],
+                                                        owner_address = owner_details_table_parse$owner_mail_address[ind],
+                                                        owner_active_year = owner_details_table_parse$owner_active_year[ind]
+                                                        )
+                                 
+                                 fin_owner_scrape = officer_business_bind(owner_fin,
+                                                                          business_details_table_parse)
+                               }
+                               fin_owner_scrape
+                               
                              }
-                             fin_owner_scrape
-                             
-                           }
-      
-      if(sum(!finance_inds)>0){
-        # print('2.2')
-        owners_non_fin = data.frame(owner_name = owner_details_table_parse$owner_name,
-                                    owner_title = owner_details_table_parse$owner_title,
-                                    owner_address = owner_details_table_parse$owner_mail_address,
-                                    owner_active_year = owner_details_table_parse$owner_active_year)[!finance_inds,]
-        
-        
-        owners_non_fin =officer_business_bind(owners_non_fin,
-                                              business_details_table_parse)
-        
-        results = data.frame(rbind(owners_fin,
-                                   owners_non_fin))
+        # print(depth)
+        # print('fin')
+        owners_fin$situs_pID <- situs_pID
+        owners_fin$situs_address <- situs_address
+        print(owners_fin)
+        if(sum(!finance_inds)>0){
+          print('2.2')
+          owners_non_fin = data.frame(owner_name = owner_details_table_parse$owner_name,
+                                      owner_title = owner_details_table_parse$owner_title,
+                                      owner_address = owner_details_table_parse$owner_mail_address,
+                                      owner_active_year = owner_details_table_parse$owner_active_year)[!finance_inds,]
+          
+          
+          owners_non_fin =officer_business_bind(owners_non_fin,
+                                                business_details_table_parse)
+          # print(depth)
+          # print('nonfin')
+          owners_non_fin$situs_pID <- situs_pID
+          owners_non_fin$situs_address <- situs_address
+          # print(owners_non_fin)
+          results = data.frame(rbind(owners_fin,
+                                     owners_non_fin))
+          # print(results)
+        }
+        else{
+          print('2.3')
+          results = data.frame(owners_fin)
+          # print(results)
+        }
       }
       else{
-        # print('2.3')
-        results = data.frame(owners_fin)
+        print('3')
+        # print(owner_details_table_parse)
+        owner_table = data.frame(owner_name= owner_details_table_parse$owner_name,
+                                 owner_title = owner_details_table_parse$owner_title,
+                                 owner_address = owner_details_table_parse$owner_mail_address,
+                                 owner_active_year = owner_details_table_parse$owner_active_year)
+        # print(owner_table)
+        # print(business_details_table_parse)
+        results <- officer_business_bind(owner_table,
+                                         business_details_table_parse)
+        results$situs_pID <- situs_pID
+        results$situs_address <- situs_address
+        # print(results)
+        
       }
+      
     }
     else{
-      # print('3')
-      # print(owner_details_table_parse)
+      # print('4')
       owner_table = data.frame(owner_name = owner_details_table_parse$owner_name,
                                owner_title = owner_details_table_parse$owner_title,
-                               owner_mail_address = owner_details_table_parse$owner_mail_address,
+                               owner_address = owner_details_table_parse$owner_mail_address,
                                owner_active_year = owner_details_table_parse$owner_active_year)
       # print(owner_table)
       # print(business_details_table_parse)
       results <- officer_business_bind(owner_table,
                                        business_details_table_parse)
+      results$situs_pID <- situs_pID
+      results$situs_address <- situs_address
       # print(results)
-      results
+
       
     }
+    
+    
   }
-  
-  results$owner_mail_address <- address_clean(results,
-                                             'owner_mail_address')
+  # print(depth)
+  # print('out')
+  # print(results)
+  results$owner_address <- address_clean(results,
+                                             'owner_address')
   results$corp_registered_agent_add  <- address_clean(results,
                                               'corp_registered_agent_add')
   results$owner_name <- address_clean(results,
@@ -1374,6 +1430,8 @@ scrape_owner_api = function(owner_name,
   #                                            'owner_mail_address')
   results$situs_pID <- situs_pID
   results$situs_address <- situs_address
+  # print(results)
+  # print('results')
   # print(results)
   return(results)
 }
@@ -1406,15 +1464,15 @@ owner_scrape_actual = function(austin_parcel_data_merged
   insist_scrape_owner = purrr:::insistently(scrape_owner_api,
                                             rate =purrr::rate_backoff(pause_base = 2,#5,
                                                                 pause_cap = 5,#30,
-                                                                pause_min = 1,
-                                                                max_times = 1,
+                                                                pause_min = 2,
+                                                                max_times = 2,
                                                                 jitter = TRUE
                                             ))
   if(is.na(file.size('owner_data_total.csv'))|
-     file.size('owner_data_total.csv')<15000000){
+     file.size('owner_data_total.csv')<18000000){
     # print('1')
-    registerDoFuture()
-    plan(multisession, workers = parallel::detectCores()-1)
+    # registerDoFuture()
+    # plan(multisession, workers = parallel::detectCores()-1)
     target_properties = dplyr::filter(austin_parcel_data_merged,
                                       ((is_financialized ==TRUE)&
                                          (is_owner_occupied==FALSE))|
@@ -1439,7 +1497,7 @@ owner_scrape_actual = function(austin_parcel_data_merged
                                     # print(situs_pID)
                                     # print(situs_address)
                                     # print(owner_name)
-                                    
+                                    # print(owner_address)
                                     property_owner_info <- tryCatch({insist_scrape_owner(owner_name,
                                                                                          situs_pID = situs_pID ,
                                                                                          situs_address = situs_address,
@@ -1448,7 +1506,7 @@ owner_scrape_actual = function(austin_parcel_data_merged
                                                                     error=function(cond){
                                                                       cond}
                                                                     )
-                                    # print(property_owner_info)
+                                    print(property_owner_info)
                                     if((is.null(property_owner_info)) |
                                        ('error' %in% class(property_owner_info))){
                                       # print('not found')
@@ -1457,18 +1515,18 @@ owner_scrape_actual = function(austin_parcel_data_merged
                                                                             situs_address)
                                       ))
                                     }
-                                    # print(property_owner_info)
+                                    
                                     # print(dim(data.frame(as.matrix(property_owner_info))))
                                     # print(data.frame(as.matrix(property_owner_info)))
                                     colnames(property_owner_info) <- colnames_used
-                                    
+                                    print(property_owner_info)
                                     # print('write')
                                     data.table::fwrite(property_owner_info,
-                                                       
+
                                                        'owner_data_total.csv',
                                                        append = TRUE,
                                                        sep = ','
-                                    )
+                                                       )
                                     return(NULL)
                                   }
     }
