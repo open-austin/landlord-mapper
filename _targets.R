@@ -23,6 +23,7 @@ library(selenium)
 library(reticulate)
 library(stringdist)
 library(purrr)
+library(data.table)
 library(foreach)
 library(multidplyr)
 library(doRNG)
@@ -37,6 +38,12 @@ library(lubridate)
 library(qs2)
 library(httr2)
 library(tidyr)
+library(mori)
+
+httr::set_config(httr::config(http_version = 2), override = TRUE)
+Sys.setenv('CURLOPT_HTTP_VERSION'=2)
+Sys.setenv('http_version'=2)
+# Sys.setenv(RETICULATE_PYTHON = "C:/Program Files/Python314/")
 options(future.globals.maxSize = 1.5 * 1e9)
 options(timeout = max(7200, getOption("timeout")))
 reticulate::import('pandas')
@@ -61,7 +68,8 @@ data_links <- list(Code_Complaints = 'https://data.austintexas.gov/Public-Safety
 base_used = c('Austin_Code_Complaint_Cases',
               'Short_Term_Rental_Locations',
               'Zoning_Cases')
-Sys.setenv(CENSUS_KEY='YOUR CENSUS API KEY HERE')
+Sys.setenv(CENSUS_KEY='f322ee41e382d77af0747477f0b47c8665a828bb')#'cdd487fd377da61dfdecfbcdb620f7a94f3c5b6f')
+
 Sys.getenv("CENSUS_KEY")
 #            "GCS_AUTH_FILE" = "client_secret_970494625384-1qc5cm062uj9ljhsempgh0ririra3hoi.apps.googleusercontent.com.json")
 # Set target options:
@@ -71,12 +79,12 @@ library(gargle)
 ## Fetch token. See: https://developers.google.com/identity/protocols/oauth2/scopes
 # scope <-c("https://www.googleapis.com/auth/cloud-platform")
 # token <- token_fetch(scopes = scope)
-gcs_auth(token = readRDS('token.rds'))
+gcs_auth(json_file = "landlord-mapper-texas-triangle-72fb0e8772e1.json") # token = readRDS('token.rds'))
 
 Sys.setenv("GCS_AUTH_FILE" = "landlord-mapper-texas-triangle-72fb0e8772e1.json")
 Sys.setenv("GCS_DEFAULT_BUCKET" = "cad-data-texas-triangle")
 gcs_global_bucket("cad-data-texas-triangle")
-
+# 
 project <- "Landlord-Mapper-Texas-Triangle"
 tar_option_set(
   packages = c("tibble",
@@ -101,13 +109,16 @@ tar_option_set(
                "httr2",
                "lubridate",
                "multidplyr",
+               "mori",
+               "mirai",
+               "data.table",
                "qs2"
                ), # Packages that your targets need for their tasks.
   format = "qs", # Optionally set the default storage format. qs is fast.
-  debug  = 'tcad_data',
+  # debug  = 'tcad_data',
   # cue = tar_cue(mode = "never"),
   garbage_collection = 1,
-  # targets::tar_make(callr_function = NULL, use_crew = FALSE, as_job = FALSE),
+  # targets::tar_make(callr_function = NULL, use_crew = FALSE, as_job = FALSE)
   #
   # Pipelines that take a long time to run may benefit from
   # optional distributed computing. To use this capability
@@ -117,12 +128,12 @@ tar_option_set(
   # sets a controller that scales up to a maximum of two workers
   # which run as local R processes. Each worker launches when there is work
   # to do and exits if 60 seconds pass with no tasks to run.
-  # resources = tar_resources(gcp = tar_resources_gcp(bucket = gcs_get_global_bucket(),
-  #                                                   prefix = "Landlord-Mapper-Texas-Triangle",
-  #                                                   predefined_acl = 'bucketLevel')
-                            # ),
-  # repository = 'gcp',
-  # repository_meta = 'gcp',
+  resources = tar_resources(gcp = tar_resources_gcp(bucket = gcs_get_global_bucket(),
+                                                    prefix = "Landlord-Mapper-Texas-Triangle",
+                                                    predefined_acl = 'bucketLevel')
+  ),
+  repository = 'gcp',
+  repository_meta = 'gcp',
   controller = crew::crew_controller_local(workers = parallel::detectCores(),
                                            seconds_idle = 10)
   #
@@ -162,9 +173,11 @@ list(
              deployment = 'main'),
   tar_target(hays_data,
              command = parse_hays_cad_data(),
+           # skip = any(grepl('hays_data',list.files('_targets/objects'))),
              deployment = 'main'),
   tar_target(pacs_data,
              command = ingest_proton_pacs_cad_data('AUSTIN–SAN ANTONIO METROPLEX (13 of 13).zip'),
+           # skip = any(grepl('pacs_data',list.files('_targets/objects'))),
              deployment = 'main'),
   tar_target(
     name = tcad_data_get,
@@ -310,15 +323,46 @@ list(
              deployment = 'main'
              ),
   tar_target(situs_owner_strings,
-             situs_owner_string_gen(austin_parcel_data_merged_owner),
+             command = {
+               # if((is.na(file.size(tar_read_raw('situs_owner_strings')))|
+               #                 (file.size(tar_read_raw('situs_owner_strings'))<80000000))){
+                 situs_owner_string_gen(austin_parcel_data_merged_owner)
+               # }
+             },
+           # skip = TRUE,
+           # skip =(is.na(file.size(tar_read_raw('situs_owner_strings')))|
+           #             (file.size(tar_read_raw('situs_owner_strings'))<80000000)
+           #        ),
              deployment = 'main'),
   tar_target(situs_group_assignments,
-             situs_owner_string_dist_matrix(situs_owner_strings,
-                                            austin_parcel_data_merged_owner),
+             command = {
+               # if( (is.na(file.size(tar_read_raw('situs_group_assignments')))|
+               #      (file.size(tar_read_raw('situs_group_assignments'))<10000000))){
+                 situs_owner_string_dist_matrix(situs_owner_strings,
+                                                austin_parcel_data_merged_owner)
+               # }
+             },
+             # skip = TRUE,
+           # skip = (is.na(file.size(tar_read_raw('situs_group_assignments')))|
+           #           (file.size(tar_read_raw('situs_group_assignments'))<10000000)),
              deployment = 'main'),
-  tar_target(situs_group_assignments_final,
+  tar_target(austin_parcel_data_merged_owner_clean,
+             situs_neighor_gen_clean(austin_parcel_data_merged_owner)
+             # skip = TRUE
+             # skip = sum(grepl('situs_group_assignments_final',
+             #                  list.files("_targets\\objects")))>0
+             ),
+ 
+   tar_target(situs_group_assignments_neigh,
              situs_neighor_gen(situs_group_assignments,
-                               austin_parcel_data_merged_owner)
+                               austin_parcel_data_merged_owner_clean)
+             # skip = sum(grepl('situs_group_assignments_final',
+             #                  list.files("_targets\\objects")))>0
+             ),
+  tar_target(situs_group_assignments_final,
+             situs_neighor_gen_final(austin_parcel_data_merged_owner_clean,
+                                     situs_group_assignments_neigh
+                                     )
              # skip = sum(grepl('situs_group_assignments_final',
              #                  list.files("_targets\\objects")))>0
              ),
@@ -334,7 +378,7 @@ list(
              deployment = 'main')
   )
 
-# 
+# "381230"  "517732"  "654235"  "2020792"
 # tar_plan(
 #   penguins_csv_file = path_to_file("penguins_raw.csv"),
 #   penguins_data_raw = read_csv(penguins_csv_file, show_col_types = FALSE),
