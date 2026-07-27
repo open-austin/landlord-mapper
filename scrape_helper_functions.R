@@ -587,13 +587,15 @@ parse_wcad_data = function(raw_data){
   
 }
 
-parse_hays_cad_data = function(dir =  "AUSTIN–SAN ANTONIO METROPLEX (13 of 13)\\HAYS COUNTY APPRAISAL DISTRICT+SR(done)",
+parse_hays_cad_data = function(dir =  "austin_sanantonio",
                                zipfile = "AUSTIN–SAN ANTONIO METROPLEX (13 of 13).zip",
                                county = "HAYS COUNTY APPRAISAL DISTRICT+SR(done)",
                                year_used = 2025){
-  
-  folder <- file.path( tempdir() , gsub('[[:punct:]]','',
+  zipfile <- iconv(zipfile,to='UTF-8')
+  folder <- file.path( tempdir() , gsub('[[:punct:][:space:]]|-','',
                                         zipfile) ) 
+  print(folder)
+  print(zipfile)
   unzip(zipfile, 
         exdir = folder )
   counties <- list.files(folder)
@@ -1352,9 +1354,9 @@ scrape_owner_api = function(owner_name,
         # print('fin')
         owners_fin$situs_pID <- situs_pID
         owners_fin$situs_address <- situs_address
-        print(owners_fin)
+        # print(owners_fin)
         if(sum(!finance_inds)>0){
-          print('2.2')
+          # print('2.2')
           owners_non_fin = data.frame(owner_name = owner_details_table_parse$owner_name,
                                       owner_title = owner_details_table_parse$owner_title,
                                       owner_address = owner_details_table_parse$owner_mail_address,
@@ -1373,13 +1375,13 @@ scrape_owner_api = function(owner_name,
           # print(results)
         }
         else{
-          print('2.3')
+          # print('2.3')
           results = data.frame(owners_fin)
           # print(results)
         }
       }
       else{
-        print('3')
+        # print('3')
         # print(owner_details_table_parse)
         owner_table = data.frame(owner_name= owner_details_table_parse$owner_name,
                                  owner_title = owner_details_table_parse$owner_title,
@@ -1469,10 +1471,9 @@ owner_scrape_actual = function(austin_parcel_data_merged
                                                                 jitter = TRUE
                                             ))
   if(is.na(file.size('owner_data_total.csv'))|
-     file.size('owner_data_total.csv')<18000000){
+     file.size('owner_data_total.csv')<40000000){
     # print('1')
-    # registerDoFuture()
-    # plan(multisession, workers = parallel::detectCores()-1)
+    
     target_properties = dplyr::filter(austin_parcel_data_merged,
                                       ((is_financialized ==TRUE)&
                                          (is_owner_occupied==FALSE))|
@@ -1484,10 +1485,12 @@ owner_scrape_actual = function(austin_parcel_data_merged
                                          (as.numeric(situs_pID) %in% 
                                             as.numeric(unique(target_owner_info$situs_pID))==FALSE ))
       print(dim(target_properties))
+      registerDoFuture()
+      plan(multisession, workers = parallel::detectCores())
       target_owner_info = foreach(index =1:nrow(target_properties),
                                   .combine = 'rbind',
                                   .options.RNG = 8989,
-                                  .export = financial_marker_string) %do% {
+                                  .export = financial_marker_string) %dopar% {
                                     # print(index)
                                     owner_name =target_properties$owner_name[index]
                                     owner_address = target_properties$owner_address[index]
@@ -1506,7 +1509,7 @@ owner_scrape_actual = function(austin_parcel_data_merged
                                                                     error=function(cond){
                                                                       cond}
                                                                     )
-                                    print(property_owner_info)
+                                    # print(property_owner_info)
                                     if((is.null(property_owner_info)) |
                                        ('error' %in% class(property_owner_info))){
                                       # print('not found')
@@ -1519,7 +1522,7 @@ owner_scrape_actual = function(austin_parcel_data_merged
                                     # print(dim(data.frame(as.matrix(property_owner_info))))
                                     # print(data.frame(as.matrix(property_owner_info)))
                                     colnames(property_owner_info) <- colnames_used
-                                    print(property_owner_info)
+                                    # print(property_owner_info)
                                     # print('write')
                                     data.table::fwrite(property_owner_info,
 
