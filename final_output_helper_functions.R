@@ -292,9 +292,9 @@ reg_agent_string_gen = function(data_used,
                                results <- unique(data_used[agent_inds[agent_inds_cuts==level_used],
                                                            'agent_address'])
                                # ret_inds <- which(sapply(results,nchar)>20)
-                               if(length(ret_inds)>0){
-                                 results <- results[which(sapply(results,nchar)>20)]  
-                               }
+                               # if(length(ret_inds)>0){
+                               results <- results[which(sapply(results,nchar)>20)]  
+                               # }
                                
                                results <- paste(results[which(results!="")],
                                                 collapse = '|')
@@ -537,9 +537,9 @@ situs_owner_string_dist_matrix = function(situs_owner_strings,
   situs_owner_cosine_dist_matrix
 }
 
-situs_neighbor_cov = function(situs_owner_cosine_dist_matrix){
-  Rfast::cova(q3_dist_matrix, large = TRUE)
-}
+# situs_neighbor_cov = function(situs_owner_cosine_dist_matrix){
+#   Rfast::cova(q3_dist_matrix, large = TRUE)
+# }
 
 situs_neighor_gen_clean = function(owner_data_used){
   
@@ -571,6 +571,7 @@ situs_neighor_gen_clean = function(owner_data_used){
   print(Sys.time())
   # else{
   cl <- multidplyr::new_cluster(parallel::detectCores())
+  owner_data_used$legallocationdesc <- NULL
   
   
   print(dim(owner_data_used))
@@ -751,9 +752,9 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
       # print('exact matches done')
       # print(agent_add_neighs)
       if(unique(situs_pID) %in% pIDs_used){
-        print(paste(unique(situs_pID),
-                    unique(situs_address),
-                    sep = '\\|'))
+        # print(paste(unique(situs_pID),
+        #             unique(situs_address),
+        #             sep = '\\|'))
         situs_dist_ind <- which(grepl(paste(unique(situs_pID),
                                             unique(situs_address),
                                             sep = '\\|'),
@@ -843,9 +844,9 @@ situs_neighor_gen_final = function(owner_data_used,
   
   # readr::write_rds(situs_neighbor_ind,
   #                  'situs_neighbor_ind.rds')  
-  print(Sys.time())
-  print(dim(owner_data_used))
-  print(dim(situs_neighbor_ind))
+  # print(Sys.time())
+  # print(dim(owner_data_used))
+  # print(dim(situs_neighbor_ind))
   # print('neigh'
   iterative_add = function(inds, 
                            neighbors,
@@ -926,22 +927,22 @@ situs_neighor_gen_final = function(owner_data_used,
     result[order(result)]
   }
   situs_neighbors <- strsplit(situs_neighbor_ind$situs_neighbors, split = ' ')
-  situs_neighbors_padded <- paste(' ', situs_group_assignments_neigh$situs_neighbors, ' ',
-                                  sep = )
+  situs_neighbors_padded <- paste(' ', situs_neighbor_ind$situs_neighbors, ' ',
+                                  sep = '')
   #   
   # situs_neighbors_shared <- mori::share(situs_neighbors)
   
   second_inds <- c()
-  # options(future.globals.maxSize = 4e9)
-  # registerDoFuture()
-  # plan(multisession,
-  #      maxSizeOfObjects = 4e9
-  # )
+  options(future.globals.maxSize = 4e9)
+  registerDoFuture()
+  plan(multisession,
+       maxSizeOfObjects = 4e9
+  )
   print(Sys.time())
-  matched_owners_inds_uniq<-unique(foreach(inds = situs_neighbors) %do% {
-    print(inds)
-    print('start')
-    print(Sys.time())
+  matched_owners_inds_uniq<-unique(foreach(inds = situs_neighbors) %dopar% {
+    # print(inds)
+    # print('start')
+    # print(Sys.time())
     result <-na.omit(iterative_add(inds = inds,
                                    second_inds,
                                    situs_neighbors,
@@ -982,12 +983,12 @@ situs_neighor_gen_final = function(owner_data_used,
     # second_inds <- unique(c(second_inds,
     #                         result))
     # print('done')
-    print(Sys.time())
+    # print(Sys.time())
     #   # print('sec')
     result <- unique(result[order(result)])
-    print('done')
-    print(result)
-    print(length(result))
+    # print('done')
+    # print(result)
+    # print(length(result))
     # readr::write_rds(second_inds,'second_inds.rds')
     result
   })
