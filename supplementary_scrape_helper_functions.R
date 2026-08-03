@@ -1,6 +1,6 @@
 austin_open_data_dl_shell = function(link_used,
                                      base_used,
-                                     download_location = 'C:/Users/kevin/Downloads'){
+                                     download_location = getwd()){
   initial_try = tryCatch({
     austin_open_data_dl(link_used,
                       base_used,
@@ -23,7 +23,7 @@ austin_open_data_dl = function(link_used,
                                                              interactive = FALSE,
                                                              path = getwd(), temp = TRUE),
                                              SeleniumSession$new(browser = 'chrome',
-                                                                 capabilities = selenium::chrome_options(args=c('--headless',
+                                                                 capabilities = selenium::chrome_options(args=c(#'--headless',
                                                                    '--no-sandbox',
                                                                    '--disable-extensions',
                                                                    '--disable-browser-side-navigation',
@@ -34,7 +34,7 @@ austin_open_data_dl = function(link_used,
                                                                  timeout = 60))
                                ,
                                timeout = 60
-  )
+                               )
   base_url = link_used
   open_url(base_url)
   
@@ -49,7 +49,8 @@ austin_open_data_dl = function(link_used,
   name_used = sprintf('%s_%s.csv',
                       base_used,
                       gsub('-','',lubridate::ymd(as.Date(Sys.time())))
-  )
+                      )
+  print(name_used)
   file_used = paste(download_location,
                     name_used,
                     sep = '/')
