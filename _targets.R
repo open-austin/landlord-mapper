@@ -39,6 +39,7 @@ library(qs2)
 library(httr2)
 library(tidyr)
 library(mori)
+library(Rfast)
 
 httr::set_config(httr::config(http_version = 2), override = TRUE)
 Sys.setenv('CURLOPT_HTTP_VERSION'=2)
@@ -76,11 +77,12 @@ Sys.getenv("CENSUS_KEY")
 library(googleCloudStorageR)
 library(gargle)
 
+
 ## Fetch token. See: https://developers.google.com/identity/protocols/oauth2/scopes
 # scope <-c("https://www.googleapis.com/auth/cloud-platform")
 # token <- token_fetch(scopes = scope)
 gcs_auth(json_file = "landlord-mapper-texas-triangle-72fb0e8772e1.json") # token = readRDS('token.rds'))
-
+# Sys.setenv('GAR_CLIENT_JSON'='landlord-mapper-texas-triangle-72fb0e8772e1.json')
 Sys.setenv("GCS_AUTH_FILE" = "landlord-mapper-texas-triangle-72fb0e8772e1.json")
 Sys.setenv("GCS_DEFAULT_BUCKET" = "cad-data-texas-triangle")
 gcs_global_bucket("cad-data-texas-triangle")
@@ -108,11 +110,12 @@ tar_option_set(
                "tidycensus",
                "httr2",
                "lubridate",
+               "Rfast",
                "multidplyr",
                "mori",
                "mirai",
-               "data.table",
-               "qs2"
+               "data.table"
+               # "qs2"
                ), # Packages that your targets need for their tasks.
   format = "qs", # Optionally set the default storage format. qs is fast.
   # debug  = 'tcad_data',
@@ -319,8 +322,8 @@ list(
   #                             code_complaint_data),
   #            deployment = 'main'),
   tar_target(austin_parcel_data_merged_owner,
-             owner_scrape_actual(austin_parcel_data_merged),
-             deployment = 'main'
+             owner_scrape_actual(austin_parcel_data_merged)
+             # deployment = 'main'
              ),
   tar_target(situs_owner_strings,
              command = {
@@ -328,12 +331,13 @@ list(
                #                 (file.size(tar_read_raw('situs_owner_strings'))<80000000))){
                  situs_owner_string_gen(austin_parcel_data_merged_owner)
                # }
-             },
+             }
            # skip = TRUE,
            # skip =(is.na(file.size(tar_read_raw('situs_owner_strings')))|
            #             (file.size(tar_read_raw('situs_owner_strings'))<80000000)
            #        ),
-             deployment = 'main'),
+             # deployment = 'main'
+           ),
   tar_target(situs_group_assignments,
              command = {
                # if( (is.na(file.size(tar_read_raw('situs_group_assignments')))|
@@ -347,7 +351,11 @@ list(
            #           (file.size(tar_read_raw('situs_group_assignments'))<10000000)),
              deployment = 'main'),
   tar_target(austin_parcel_data_merged_owner_clean,
-             situs_neighor_gen_clean(austin_parcel_data_merged_owner)
+             {
+               print(dim(situs_group_assignments))
+               
+               situs_neighor_gen_clean(austin_parcel_data_merged_owner)
+             }
              # skip = TRUE
              # skip = sum(grepl('situs_group_assignments_final',
              #                  list.files("_targets\\objects")))>0
