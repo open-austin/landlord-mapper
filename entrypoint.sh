@@ -14,14 +14,18 @@ DB_DIR=$(dirname "$DB")
 mkdir -p "$DB_DIR"
 
 # --- seed -------------------------------------------------------------------
-# Two supported ways to get the database onto the volume. Both land it at $DB
-# atomically, so a container that dies mid-seed leaves no half-written database
-# for the next boot to open.
+# The database arrives as a compressed archive shipped in the image at
+# /seed/lm.sqlite3.<ext>, driven by seed-image.sh: it ships the archive for
+# exactly one deploy, then removes it and redeploys so later code deploys stay
+# small. Volumes persist, so in the steady state /seed is absent and this whole
+# block is skipped.
 #
-#   1. A compressed seed shipped in the image at /seed/lm.sqlite3.<ext>. Simple
-#      and self-healing, but it makes every code deploy re-upload the archive.
-#   2. seed-volume.sh, which streams the database in over `railway ssh` once.
-#      Keeps the image small. This is the default; /seed is normally absent.
+# Decompress to .building and rename, so a container that dies mid-seed leaves no
+# half-written database for the next boot to open.
+#
+# Streaming the database in over `railway ssh` is NOT a supported path, and that
+# is measured rather than assumed: 8 MB of piped stdin had not completed after
+# five minutes, and railway ssh intermittently drops the first line of stdout.
 if [ ! -f "$DB" ]; then
   for candidate in /seed/lm.sqlite3.zst /seed/lm.sqlite3.xz /seed/lm.sqlite3.gz /seed/lm.sqlite3; do
     [ -f "$candidate" ] || continue
@@ -50,7 +54,7 @@ fi
 if [ ! -f "$DB" ]; then
   echo "no database at $DB yet -- the volume is unseeded."
   echo "waiting. seed it from the machine holding the built database:"
-  echo "    ./seed-volume.sh /path/to/lm.sqlite3"
+  echo "    ./seed-image.sh /path/to/lm.sqlite3"
   waited=0
   while [ ! -f "$DB" ]; do
     sleep 15
@@ -60,7 +64,7 @@ if [ ! -f "$DB" ]; then
       echo "still waiting for $DB (${waited}s)"
     fi
   done
-  # seed-volume.sh renames into place, so the file appearing means it is
+  # seed-image.sh renames into place, so the file appearing means it is
   # complete. Guard the streamed-in case anyway, since a future seeding route
   # might not be atomic.
   sleep 2

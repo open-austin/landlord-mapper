@@ -1,9 +1,18 @@
-# The database and any CSV drop must never enter the build context: they are
-# 0.9-1.8 GB and live on the Railway volume, not in the image.
+# The database must never enter the build context as a raw file: it is ~1 GB and
+# lives on the Railway volume.
 *.sqlite3
 *.sqlite3-*
 *.csv
-seed/
 .git/
 *.bak
 __pycache__/
+README.md
+
+# seed/ is deliberately NOT excluded. It is how the volume gets seeded: a
+# COMPRESSED database is shipped in the image once, entrypoint.sh decompresses it
+# onto the volume on first boot, and then seed/ is deleted and the service is
+# redeployed so later code deploys stay small. See seed-image.sh.
+
+# tools/ is the verification harness (column census, output-equality diff, route
+# capture). Useful in the repo, pointless in the runtime image.
+tools/
