@@ -1,0 +1,10 @@
+# Shell scripts and the Dockerfile MUST be LF. Git's autocrlf on Windows would
+# otherwise check them out with CRLF, and a CRLF shebang line fails inside the
+# Linux container with the notoriously unhelpful:
+#   exec ./entrypoint.sh: no such file or directory
+# because the kernel treats the trailing \r as part of the interpreter path.
+*.sh text eol=lf
+Dockerfile text eol=lf
+.dockerignore text eol=lf
+*.py text eol=lf
+*.toml text eol=lf
