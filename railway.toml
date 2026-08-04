@@ -1,0 +1,27 @@
+# Railway service configuration.
+#
+# Dockerfile rather than a Nixpacks autodetect build: the app is stdlib-only, so
+# Nixpacks would infer a Python project, look for requirements.txt, find none,
+# and we would be relying on its guess. An explicit Dockerfile also pins the
+# interpreter to the version the output-identity harness was run against.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# /health returns 200 in ~1.4 ms and touches the database, so it fails when the
+# volume is unseeded or the file is unreadable -- which is exactly the condition
+# a healthcheck should catch.
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+
+# The server holds no request state between requests and the database is opened
+# read-only, so a restart is always safe. ON_FAILURE rather than ALWAYS so a
+# genuine crash-loop surfaces as a failed deploy instead of restarting forever.
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+
+# One replica. Scaling out would mean N copies of the page cache against one
+# volume, and the measured bottleneck is page cache, not CPU.
+numReplicas = 1

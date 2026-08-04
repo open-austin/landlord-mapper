@@ -1,0 +1,9 @@
+# The database and any CSV drop must never enter the build context: they are
+# 0.9-1.8 GB and live on the Railway volume, not in the image.
+*.sqlite3
+*.sqlite3-*
+*.csv
+seed/
+.git/
+*.bak
+__pycache__/
