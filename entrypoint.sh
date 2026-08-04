@@ -13,6 +13,31 @@ DB="${LM_DB:-/data/lm.sqlite3}"
 DB_DIR=$(dirname "$DB")
 mkdir -p "$DB_DIR"
 
+# --- data version -----------------------------------------------------------
+# Every seed path below is guarded by "if the database file does not exist",
+# which is right for a restart and wrong for a DATA REFRESH: the volume persists,
+# so a new database would never be picked up and the service would quietly keep
+# serving the old one. Quietly is the problem -- there would be no error to
+# notice, just stale numbers.
+#
+# So stamp the volume with whatever $LM_DATA_VERSION was in force when it was
+# seeded. If the requested version differs from the stamp, the existing database
+# is retired and the seed paths run again. Unset means "no versioning", which
+# keeps the original behaviour for anyone not using this.
+STAMP="$DB_DIR/.data-version"
+if [ -n "${LM_DATA_VERSION:-}" ] && [ -f "$DB" ]; then
+  have=$(cat "$STAMP" 2>/dev/null || echo "unstamped")
+  if [ "$have" != "$LM_DATA_VERSION" ]; then
+    echo "data version change: volume holds '$have', want '$LM_DATA_VERSION'"
+    # Rename rather than delete, so the previous database survives until the new
+    # one is safely in place. Cleaned up after a successful seed, below.
+    mv "$DB" "$DB.superseded"
+    echo "retired the old database to $(basename "$DB").superseded pending a successful seed"
+  else
+    echo "data version '$have' matches; keeping the database on the volume"
+  fi
+fi
+
 # --- seed -------------------------------------------------------------------
 # The database arrives as a compressed archive shipped in the image at
 # /seed/lm.sqlite3.<ext>, driven by seed-image.sh: it ships the archive for
@@ -116,19 +141,49 @@ if [ ! -f "$DB" ] && [ -d /seed ]; then
   fi
 fi
 
+# --- refresh outcome --------------------------------------------------------
+# A data refresh retired the previous database to .superseded above. Decide now
+# which way it went, BEFORE the wait loop, because the two outcomes want opposite
+# things: a success should discard the old file, and a failure should put it back
+# rather than sit waiting with a perfectly good database on disk.
+refresh_failed=0
+if [ -f "$DB.superseded" ]; then
+  if [ -f "$DB" ]; then
+    echo "refresh succeeded; discarding the superseded database"
+    rm -f "$DB.superseded"
+  else
+    echo "refresh FAILED to produce a new database; restoring the previous one" >&2
+    mv "$DB.superseded" "$DB"
+    refresh_failed=1
+    echo "restored the previous database; it will retry the refresh on next boot" >&2
+  fi
+fi
+
+# Record what the volume now holds, so the next boot can tell a restart from a
+# refresh.
+#
+# refresh_failed is the load-bearing part. Without it this block would stamp the
+# REQUESTED version onto the RESTORED OLD database -- the file exists again, so a
+# naive "-f $DB" test passes -- and the next boot would compare equal, skip the
+# refresh, and serve stale data forever with no error anywhere. Exactly the silent
+# staleness the stamp exists to prevent, caused by the stamp.
+if [ -n "${LM_DATA_VERSION:-}" ] && [ -f "$DB" ] && [ "$refresh_failed" -eq 0 ]; then
+  printf '%s' "$LM_DATA_VERSION" > "$STAMP"
+fi
+
 # Wait rather than exit when the volume is empty.
 #
 # Exiting here looks like the responsible choice and is actually a deadlock: the
-# only way to get the database onto the volume is `railway ssh`, and that needs a
-# RUNNING container. An entrypoint that dies on first boot can never be seeded,
-# so the service crash-loops until the retry limit and there is no way in.
+# only way to get a database onto an empty volume needs a RUNNING container. An
+# entrypoint that dies on first boot can never be seeded, so the service
+# crash-loops until the retry limit and there is no way in.
 #
-# Waiting breaks the cycle and makes seeding self-completing: deploy, stream the
-# database in, and this loop picks it up and starts serving without a restart.
+# Waiting breaks the cycle and makes seeding self-completing: deploy, let the
+# database arrive, and this loop picks it up and serves without a restart.
 if [ ! -f "$DB" ]; then
   echo "no database at $DB yet -- the volume is unseeded."
   echo "waiting. seed it from the machine holding the built database:"
-  echo "    ./seed-image.sh /path/to/lm.sqlite3"
+  echo "    set LM_SEED_URL to a presigned GET for the gzipped database"
   waited=0
   while [ ! -f "$DB" ]; do
     sleep 15

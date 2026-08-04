@@ -29,6 +29,13 @@ Three things in here are load-bearing and must not be "simplified":
    old in-memory index plus one. Search results, unsorted browse order and every
    sort tie-break inherit that order, so preserving it is what keeps the output
    byte-identical.
+
+THE TABLES THIS FILE CREATES ARE STAGING TABLES. SCHEMA below is the all-TEXT
+shape the load writes, which is the shape the load semantics are stated in; the
+last step of main() hands it to typed.retype(), which converts parcel and owner
+to the typed schema the server reads. Both paths therefore produce one schema,
+and a refresh-data.sh run cannot quietly rebuild an untyped 1.80 GB database.
+Read typed.py for what the typing does and why each step is value-preserving.
 """
 import csv
 import glob
@@ -38,6 +45,8 @@ import os
 import sqlite3
 import sys
 import time
+
+import typed
 
 csv.field_size_limit(10 * 1024 * 1024)
 
@@ -179,9 +188,11 @@ SCHEMA = """
 PRAGMA page_size = 4096;
 
 CREATE TABLE parcel (
-  -- the twenty roll columns, stored as the exact text the CSV carried, because
-  -- the server's money()/num()/dash() formatting parses those strings and any
-  -- re-typing here would change a displayed value
+  -- STAGING. The twenty roll columns as the exact text the CSV carried, which is
+  -- the shape the load semantics below are stated in. typed.retype() converts
+  -- this table at the end of main(); it keeps every one of these strings
+  -- retrievable byte for byte, because the server's money()/num()/dash()
+  -- formatting parses them and /export.csv writes all twenty verbatim
   situs_year TEXT, situs_pID TEXT, situs_address TEXT, situs_zip TEXT,
   totalsqftlivingarea TEXT, property_units TEXT, year_built TEXT,
   state_code TEXT, is_owner_out_of_state TEXT, is_owner_occupied TEXT,
@@ -757,10 +768,13 @@ def main():
     build_owners(cx, st)
     build_filings(cx, st, by_parcel)
     del by_parcel
+    # The parcel and owner indexes belong to the typed tables and are created by
+    # typed.retype(); building them here would index staging rows that are about
+    # to be dropped.
     log("remaining indexes")
     for stmt in INDEXES.strip().split(";"):
         s = stmt.strip()
-        if s and "ON parcel" not in s:
+        if s and "ON parcel" not in s and "ON owner(" not in s:
             cx.execute(s)
     st["load_seconds"] = round(time.time() - t0, 1)
     st["built_at"] = time.time()
@@ -770,8 +784,15 @@ def main():
         cx.execute("INSERT OR REPLACE INTO meta VALUES (?,?)",
                    (k, json.dumps(v)))
     cx.commit()
+    # Everything above wrote the all-TEXT staging tables. This turns parcel and
+    # owner into the typed ones and creates their indexes; the VACUUM after it is
+    # what reclaims the pages the dropped columns freed and is not optional.
+    typed.retype(cx, log=log)
     log("analyze")
     cx.execute("ANALYZE")
+    cx.commit()
+    log("vacuum")
+    cx.execute("VACUUM")
     cx.commit()
     cx.close()
     os.replace(tmp, OUT)

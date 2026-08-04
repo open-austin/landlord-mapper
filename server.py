@@ -315,7 +315,77 @@ def scope_reason(rec):
 DB_PATH = os.environ.get(
     "LM_DB", os.path.expanduser("~/landlord-mapper-db/lm.sqlite3"))
 
-PARCEL_SQL = ", ".join(PARCEL_COLS)
+# ---------------------------------------------------------------------------
+# the typed store: reading the original text back out of typed storage
+# ---------------------------------------------------------------------------
+# Every column used to be TEXT holding the exact CSV string, which is what made
+# the CSV -> SQLite port output-identical. It also cost 1.80 GB, because two
+# million rows each spell out "travis" and "TRUE" and their digits in full.
+# typed.py now stores the small-value-set columns as INTEGER codes into tiny d_*
+# dictionaries, drops the columns that were proven exact functions of another
+# column, and keeps only the exceptions where a column was nearly one.
+#
+# Nothing above or below this section changed shape: PARCEL_SQL still yields the
+# twenty roll columns in PARCEL_COLS order and still yields the original strings,
+# it just spells each one as the expression that reconstructs it. A scalar
+# subquery against a dictionary of at most 34,417 rows is a lookup in a page or
+# two that stays in cache.
+#
+# owner_name and owner_address come off the joined owner row: measured on the
+# 1.80 GB file, parcel.owner_address equalled its owner row's address for all
+# 2,117,593 rows and parcel.owner_name equalled its owner row's name for all but
+# 3,508, which are the only ones stored (in owner_name_x).
+def _dict_sql(dict_table, col):
+    return "(SELECT t FROM %s WHERE c = %s)" % (dict_table, col)
+
+
+PARCEL_EXPR = {
+    "situs_year": lambda p: _dict_sql("d_situs_year", p + "situs_year"),
+    "situs_pID": lambda p: p + "situs_pID",
+    "situs_address": lambda p: p + "situs_address",
+    "situs_zip": lambda p: _dict_sql("d_zip", p + "situs_zip"),
+    "totalsqftlivingarea": lambda p: p + "totalsqftlivingarea",
+    "property_units": lambda p: p + "property_units",
+    "year_built": lambda p: _dict_sql("d_year_built", p + "year_built"),
+    "state_code": lambda p: _dict_sql("d_state_code", p + "state_code"),
+    "is_owner_out_of_state":
+        lambda p: _dict_sql("d_bool3", p + "is_owner_out_of_state"),
+    "is_owner_occupied": lambda p: _dict_sql("d_bool3", p + "is_owner_occupied"),
+    "is_financialized": lambda p: _dict_sql("d_bool3", p + "is_financialized"),
+    "is_mom_and_pop": lambda p: _dict_sql("d_bool3", p + "is_mom_and_pop"),
+    "legallocationdesc": lambda p: p + "legallocationdesc",
+    "owner_name": lambda p: "COALESCE(%sowner_name_x, o.name)" % p,
+    "owner_address": lambda p: "o.address",
+    "owner_zip": lambda p: _dict_sql("d_owner_zip", p + "owner_zip"),
+    "agent_name": lambda p: _dict_sql("d_agent", p + "agent_name"),
+    "recent_purchase_date":
+        lambda p: _dict_sql("d_rpd", p + "recent_purchase_date"),
+    "totalpropmktvalue":
+        lambda p: "COALESCE(%stotalpropmktvalue_x, CAST(%sn_val AS TEXT))" % (p, p),
+    "county": lambda p: _dict_sql("d_county", p + "county"),
+}
+
+
+def parcel_select(prefix="p."):
+    """The twenty roll columns, in PARCEL_COLS order, as the original strings.
+
+    Requires the owner row to be joined as `o`, because two of the twenty are
+    read off it now."""
+    return ", ".join("%s AS %s" % (PARCEL_EXPR[c](prefix), c)
+                     for c in PARCEL_COLS)
+
+
+# `parcel p JOIN owner o` rather than `parcel` alone. The join is on owner's
+# INTEGER PRIMARY KEY-shaped text primary key, one B-tree probe per row, and
+# every parcel has an owner row by construction (build-db.py builds owners out of
+# the parcels; typed.py refuses to run if that is ever untrue).
+PARCEL_FROM = "FROM parcel p JOIN owner o ON o.owner_id = p.owner_id "
+PARCEL_SQL = parcel_select()
+
+# The owner columns that became dictionary codes. Spelled here once so the four
+# hand-rolled owner SELECTs elsewhere can reuse them.
+O_STATE = _dict_sql("d_ostate", "o.state")
+O_COUNTIES_SCOPE = _dict_sql("d_counties_scope", "o.counties_scope")
 
 OWNER_COLS = (
     "owner_id", "name", "address", "in_scope", "state", "n_parcels",
@@ -324,7 +394,20 @@ OWNER_COLS = (
     "last_purchase", "n_parcels_scope", "scope_units", "scope_value",
     "counties_scope", "first_rowid", "first_scope_rowid", "corp_name", "agent",
 )
-OWNER_SQL = ", ".join(OWNER_COLS)
+# Same idea as PARCEL_EXPR: the columns whose value set is small enough to be
+# worth a dictionary are selected back through it, so an owner row still arrives
+# as the strings OwnerDict always held.
+OWNER_EXPR = {
+    "state": _dict_sql("d_ostate", "state"),
+    "counties_all": _dict_sql("d_counties_all", "counties_all"),
+    "zips_all": _dict_sql("d_zips_all", "zips_all"),
+    "first_purchase": _dict_sql("d_pdate", "first_purchase"),
+    "last_purchase": _dict_sql("d_pdate", "last_purchase"),
+    "counties_scope": _dict_sql("d_counties_scope", "counties_scope"),
+}
+OWNER_SQL = ", ".join(
+    "%s AS %s" % (OWNER_EXPR[c], c) if c in OWNER_EXPR else c
+    for c in OWNER_COLS)
 
 FILING_COLS = (
     "owner_id", "corp_name", "ttn", "mail", "mail_norm", "rtt", "formation",
@@ -403,8 +486,8 @@ class ParcelRows:
             chunk = want[n:n + 500]
             qs = ",".join("?" * len(chunk))
             for row in self.db.all(
-                    "SELECT rowid, " + PARCEL_SQL
-                    + " FROM parcel WHERE rowid IN (%s)" % qs,
+                    "SELECT p.rowid, " + PARCEL_SQL + " " + PARCEL_FROM
+                    + "WHERE p.rowid IN (%s)" % qs,
                     [i + 1 for i in chunk]):
                 c[row[0] - 1] = tuple(row[1:])
 
@@ -413,7 +496,8 @@ class ParcelRows:
         got = c.get(i)
         if got is None:
             row = self.db.one(
-                "SELECT " + PARCEL_SQL + " FROM parcel WHERE rowid = ?", (i + 1,))
+                "SELECT " + PARCEL_SQL + " " + PARCEL_FROM + "WHERE p.rowid = ?",
+                (i + 1,))
             if row is None:
                 raise IndexError(i)
             got = c[i] = tuple(row)
@@ -605,6 +689,11 @@ class Store:
         self.filings = FilingTable(self.db)
         self.stats = {}
         self.loaded_at = 0.0
+        # ?county= and ?zip= arrive as text and the stored columns are INTEGER
+        # codes, so the filter has to be translated. Both dictionaries are tiny
+        # (13 counties, 540 zip spellings) and static, so they are read once.
+        self.county_code = {}
+        self.zip_codes = {}
 
     # -- load -------------------------------------------------------------
     def load(self):
@@ -616,6 +705,13 @@ class Store:
             st[k] = json.loads(v)
         st.setdefault("errors", [])
         self.stats = st
+        # d_county.n is norm_txt(county); d_zip.n is the trimmed spelling, which
+        # is what the old zip_trim column held. Several raw zip spellings can
+        # trim to one value, so a requested ZIP maps to a LIST of codes.
+        self.county_code = {n: c for c, n in self.db.all("SELECT c, n FROM d_county")}
+        self.zip_codes = {}
+        for c, n in self.db.all("SELECT c, n FROM d_zip"):
+            self.zip_codes.setdefault(n, []).append(c)
         # "Data read into this page" means when the data was read, which is when
         # the database was built, not when this process happened to start
         self.loaded_at = st.get("built_at") or time.time()
@@ -631,9 +727,15 @@ class Store:
         callers must be ready for more than one."""
         pid = norm_pid(pid_raw)
         if county:
+            # county is an INTEGER code now, so an unknown county name resolves
+            # to no code and must select nothing, which is what the text
+            # comparison did
+            code = self.county_code.get(norm_txt(county))
+            if code is None:
+                return []
             rows = self.db.all(
-                "SELECT rowid FROM parcel WHERE county_norm = ? AND pid_norm = ? "
-                "ORDER BY rowid", (norm_txt(county), pid))
+                "SELECT rowid FROM parcel WHERE county = ? AND pid_norm = ? "
+                "ORDER BY rowid", (code, pid))
         else:
             rows = self.db.all(
                 "SELECT rowid FROM parcel WHERE pid_norm = ? ORDER BY rowid",
@@ -675,9 +777,13 @@ class Store:
         # evicts everything else -- measured /rankings going 0.179 s -> 4.469 s
         # on the request following one search. Same WHERE, same ORDER BY rowid,
         # same LIMIT, so the selected rows are byte-identical either way.
+        # ix_p_addr is on situs_address now, and answers what addr_upper used to:
+        # the roll's address text is already uppercase, so addr_upper equalled
+        # situs_address for all 2,117,593 rows (checked, not assumed) and the
+        # column was pure duplication.
         rows = self.db.all(
             "SELECT rowid FROM parcel INDEXED BY ix_p_addr "
-            "WHERE addr_upper LIKE ? ESCAPE '\\' "
+            "WHERE situs_address LIKE ? ESCAPE '\\' "
             "ORDER BY rowid LIMIT ?", (pat, MAX_HITS))
         hits = [r[0] - 1 for r in rows]
         self.parcels.warm(hits)
@@ -2753,11 +2859,18 @@ SORT_KEYS = {
     "units": "n_units",
     "sqft": "n_sqft",
     "year_built": "n_yb",
-    "address": "addr_upper",
+    # Four of these order by an INTEGER now instead of by text, and they still
+    # produce the same page. county / situs_zip / pdate are dictionary codes
+    # assigned in text sort order, so ordering by the code is the same
+    # permutation as ordering by the string. owner_seq and pid_seq are DENSE
+    # ranks of the old owner_name_norm and pid_sort, which is order preserving
+    # AND tie preserving, so "ORDER BY seq, rowid" keeps the same rows tied and
+    # broken by rowid as "ORDER BY text, rowid" did.
+    "address": "situs_address",
     "county": "county",
     "zip": "situs_zip",
-    "owner": "owner_name_norm",
-    "pid": "pid_sort",
+    "owner": "owner_seq",
+    "pid": "pid_seq",
     "acquired": "pdate",
 }
 FLAG_COL = {F_OOS: "f_oos", F_OCC: "f_occ", F_FIN: "f_fin", F_MOM: "f_mom"}
@@ -2836,11 +2949,20 @@ class Filt:
         if self.scope == SCOPE_IN:
             w.append("in_scope = 1")
         if self.counties:
-            w.append("county_norm IN (%s)" % ",".join("?" * len(self.counties)))
-            a.extend(sorted(self.counties))
+            # county_norm and zip_trim are gone: the same information is the
+            # INTEGER code, and a name with no code has to select nothing, which
+            # is what comparing it against the text column did.
+            codes = [STORE.county_code.get(c) for c in sorted(self.counties)]
+            codes = [c for c in codes if c is not None] or [-1]
+            w.append("county IN (%s)" % ",".join("?" * len(codes)))
+            a.extend(codes)
         if self.zips:
-            w.append("zip_trim IN (%s)" % ",".join("?" * len(self.zips)))
-            a.extend(self.zips)
+            codes = []
+            for z in self.zips:
+                codes.extend(STORE.zip_codes.get(z, ()))
+            codes = codes or [-1]
+            w.append("situs_zip IN (%s)" % ",".join("?" * len(codes)))
+            a.extend(codes)
         r = self.rng
         if "units_min" in r:
             w.append("n_units >= ?")
@@ -3007,8 +3129,10 @@ def owner_parcels_page(oid, f, limit):
 # the ranking metric, in RANK_SLOT order: parcels, units, value
 RANK_METRIC = ("n_parcels_scope", "scope_units", "scope_value")
 RANK_GROUP_METRIC = ("c", "u", "v")
-RANK_ROW_SQL = ("owner_id, name, state, agent, n_parcels, n_parcels_scope, "
-                "scope_units, scope_value, counties_scope")
+RANK_ROW_SQL = ("owner_id, name, %s AS state, agent, n_parcels, "
+                "n_parcels_scope, scope_units, scope_value, %s AS counties_scope"
+                % (_dict_sql("d_ostate", "state"),
+                   _dict_sql("d_counties_scope", "counties_scope")))
 
 
 def rank_group_sql(f):
@@ -3055,8 +3179,8 @@ def rank_owners_rows(f, offset, limit):
             % RANK_METRIC[slot], (limit, offset))
     grp, a = rank_group_sql(f)
     return STORE.db.all(
-        "SELECT g.owner_id, o.name, o.state, o.agent, o.n_parcels, g.c, g.u, "
-        "g.v, o.counties_scope FROM (%s) g JOIN owner o "
+        "SELECT g.owner_id, o.name, " + O_STATE + ", o.agent, o.n_parcels, "
+        "g.c, g.u, g.v, " + O_COUNTIES_SCOPE + " FROM (%s) g JOIN owner o "
         "ON o.owner_id = g.owner_id "
         "ORDER BY g.%s DESC, o.name, g.mr LIMIT ? OFFSET ?"
         % (grp, RANK_GROUP_METRIC[slot]), list(a) + [limit, offset])
@@ -3601,10 +3725,10 @@ EXPORT_OWNER_COLS = [
 # to filing: build-db.py denormalises them there for this query, and the two
 # are equal for all 1,718,226 owners (checked, not assumed).
 EXPORT_PARCEL_SELECT = (
-    "SELECT " + ", ".join("p." + c for c in PARCEL_COLS)
-    + ", p.in_scope, p.owner_id, o.state, o.corp_name, o.agent, "
-      "p.county, p.situs_pID "
-      "FROM parcel p JOIN owner o ON o.owner_id = p.owner_id ")
+    "SELECT " + PARCEL_SQL
+    + ", p.in_scope, p.owner_id, " + O_STATE + ", o.corp_name, o.agent, "
+    + PARCEL_EXPR["county"]("p.") + ", p.situs_pID "
+    + PARCEL_FROM)
 
 
 def export_parcel_rows(where, args, order, limit):
@@ -3632,16 +3756,19 @@ def export_owner_rows(f):
     f.scope = SCOPE_IN
     slot = RANK_SLOT[f.rank]
     if f.trivial():
-        sql = ("SELECT owner_id, name, address, state, n_parcels_scope, "
-               "n_parcels, scope_units, scope_value, counties_scope, corp_name, "
-               "agent FROM owner WHERE in_scope = 1 "
+        sql = ("SELECT owner_id, name, address, "
+               + _dict_sql("d_ostate", "state") + ", n_parcels_scope, "
+               "n_parcels, scope_units, scope_value, "
+               + _dict_sql("d_counties_scope", "counties_scope")
+               + ", corp_name, agent FROM owner WHERE in_scope = 1 "
                "ORDER BY %s DESC, name, first_scope_rowid LIMIT %d"
                % (RANK_METRIC[slot], EXPORT_CAP))
         args = ()
     else:
         grp, a = rank_group_sql(f)
-        sql = ("SELECT g.owner_id, o.name, o.address, o.state, g.c, o.n_parcels, "
-               "g.u, g.v, o.counties_scope, o.corp_name, o.agent FROM (%s) g "
+        sql = ("SELECT g.owner_id, o.name, o.address, " + O_STATE
+               + ", g.c, o.n_parcels, g.u, g.v, " + O_COUNTIES_SCOPE
+               + ", o.corp_name, o.agent FROM (%s) g "
                "JOIN owner o ON o.owner_id = g.owner_id "
                "ORDER BY g.%s DESC, o.name, g.mr LIMIT %d"
                % (grp, RANK_GROUP_METRIC[slot], EXPORT_CAP))
