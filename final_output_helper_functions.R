@@ -480,73 +480,106 @@ situs_owner_string_dist_matrix = function(situs_owner_strings,
   # readr::write_rds(strings_used_final,
   #                  'strings_used_final.rds')
   print(Sys.time())
-  registerDoFuture()
-  # BOX-FIX: cap the pool. A bare plan(multisession) takes
-  # future::availableCores(), which on the box is 128 -- and this container has
-  # no cpu limit for that call to read, so nothing was holding it down. Each of
-  # those sessions is a full R process with this project's package set loaded
-  # (~2.1 GiB RSS measured), so the pool alone wants ~270 GiB on a 188 GiB
-  # machine. It got there: the target ran 49 minutes, climbed 35 -> 177 GiB, and
-  # the container was OOM-killed (exit 137) with situs_group_assignments still
-  # dispatched. Nothing about the computation is wrong, only the fan-out.
+  # BOX-FIX: the ~162k-iteration stringdist fan-out is replaced by the same
+  # computation written as one blocked matrix product. The worker pool is gone
+  # with it, so the 24-session cap this block used to hold is no longer needed.
   #
-  # 24 is deliberately conservative rather than tuned. This loop is
-  # CPU-saturating (stringdist rebuilds the q-gram profile of all ~162k strings
-  # on every one of ~162k iterations), so throughput is not what is scarce --
-  # headroom is. 24 sessions is ~50 GiB of baseline, which leaves room for the
-  # main session's copy of strings_used_final, the inds_found accumulation, and
-  # the sparseMatrix built from it. Raise it only against a fresh measurement,
-  # the same way SCRAPE_WORKERS in scrape_helper_functions.R was sized.
-  DIST_MATRIX_WORKERS <- 24L
-  plan(multisession,
-       workers = min(DIST_MATRIX_WORKERS,
-                     max(1L, future::availableCores() - 1L)))
-  # Hand the sessions back before building the matrix. Without this the pool
-  # stays parked for the rest of the target, holding its whole baseline while
-  # sparseMatrix() allocates.
-  on.exit(plan(sequential), add = TRUE)
-  # mirai::daemons(parallel::detectCores()-1)
-  # daemons(parallel::detectCores())
-  # mirai::mirai_map(1:100,#length(strings_used_final),
-  #                  function(ind) {
-  #                    string = strings_used_final[ind]
-  #                    dist_vals <- stringdist::stringdist(string,
-  #                                                        strings_used_final,
-  #                                                        useBytes =TRUE,
-  #                                                        method = 'cosine',
-  #                                                        q=1)
-  #                    neighbors <- which(dist_vals<0.02)
-  #                    neighbors <- neighbors[which(neighbors>ind)]
-  #                    rowInds <<- append(rowInds,
-  #                                      rep(ind,
-  #                                          length(neighbors)
-  #                                      ))
-  #                    colInds <<- append(colInds,
-  #                                      c(neighbors))
-  #                    return(NULL)
-  #                  },
-  #                  strings_used_final = strings_used_final)[.progress]
-  # mirai::daemons(0)
-  inds_found <- foreach(ind = 1:length(strings_used_final)
-  ) %dopar% {
-    string = strings_used_final[ind]
-    dist_vals <- stringdist::stringdist(string,
-                                        strings_used_final,
-                                        useBytes =TRUE,
-                                        method = 'cosine',
-                                        q=1)
-    neighbors <- which(dist_vals<0.02)
-    neighbors <- neighbors[which(neighbors>ind)]
-    rowInds_used <- rep(ind,
-                        length(neighbors)
-    )
-    colInds_used <-  c(neighbors)
-    return(list(rowInds = rowInds_used,
-                colInds = colInds_used))
+  # method='cosine' with q=1 and useBytes=TRUE is cosine distance between
+  # single-BYTE count vectors: 1 - (v.w)/(|v||w|) over a fixed 256-dimensional
+  # space. The whole distance matrix is therefore a normalised Gram matrix, and
+  # the loop was paying stringdist to rebuild the byte profile of all 161,831
+  # strings on every one of 161,831 iterations to recover it one row at a time --
+  # O(n^2) work done n times over, and 24 R sessions each spawning a full OpenMP
+  # team inside stringdist on top of that (12,500% CPU measured, on 128 cores).
+  #
+  # Measured on the box, real situs_owner_strings input, n = 161,831:
+  #   shipped loop, 24 multisession workers : 56.0 min wall, 4.3 GiB peak container
+  #   blocked BLAS, single process          : 11.1 min wall, 4.8 GiB peak container
+  # Both produce the same 2,480,561 pairs, and the two sets are identical() --
+  # every pair, both directions checked, at full scale, not on a sample.
+  #
+  # The count matrix is n x 256 doubles = 331 MB. The n x n product is never
+  # materialised: DIST_MATRIX_BLOCK rows at a time gives one block that is
+  # thresholded and dropped, so the ceiling is bounded and predictable instead of
+  # proportional to worker count. OpenBLAS (openblas-pthread in this image)
+  # threads the product, so there is no R-level pool to size, register, or hand
+  # back -- hence no registerDoFuture()/plan() here any more. The two
+  # plan(multisession, ...) call sites further down this file are untouched.
+  #
+  # Three reference behaviours are NOT float noise and are reproduced on purpose,
+  # because the count-vector form loses them:
+  #   * stringdist('','') is 0, not NaN. The 14 zero-byte strings in this input
+  #     are mutual neighbours in the shipped loop, contributing choose(14,2) = 91
+  #     pairs. Their count vectors are all-zero so the normalised product gives
+  #     0/0; they are held out of the product and their 91 pairs added back.
+  #     Omitting this was the only discrepancy the equivalence check ever found,
+  #     and it accounted for it exactly (91 of 91, then 105 of 105 on a variant
+  #     with one more empty string appended).
+  #   * stringdist('', nonempty) is NaN and stringdist(NA, x) is NA. Both are
+  #     dropped by which(dist_vals < 0.02), so a zero-profile or NA string is
+  #     never a neighbour of a non-empty one.
+  #   * the threshold is written (1 - sim) < 0.02, not sim > 0.98, so it is the
+  #     same floating-point expression the loop evaluated. Nothing in this input
+  #     comes near the boundary anyway: over 400 query rows x 161,831 the closest
+  #     any distance got to 0.02 was 1.6e-05, and zero pairs fell within 1e-06.
+  n_strings <- length(strings_used_final)
+  string_nbytes <- nchar(strings_used_final, type = 'bytes')
+  is_na_string <- is.na(strings_used_final)
+  is_zero_profile <- !is_na_string & (string_nbytes == 0L)
+
+  byte_counts <- matrix(0, nrow = n_strings, ncol = 256L)
+  for (string_ind in seq_len(n_strings)) {
+    if (is_na_string[string_ind] || string_nbytes[string_ind] == 0L) next
+    byte_counts[string_ind, ] <- tabulate(
+      as.integer(charToRaw(strings_used_final[string_ind])) + 1L,
+      256L)
   }
-  # print(head(inds_found))
-  rowInds <- unlist(lapply(inds_found, '[[',1))
-  colInds <- unlist(lapply(inds_found, '[[',2))
+  byte_row_norms <- sqrt(rowSums(byte_counts * byte_counts))
+  degenerate_rows <- (byte_row_norms == 0) | !is.finite(byte_row_norms)
+  byte_row_norms[degenerate_rows] <- 1
+  byte_counts <- byte_counts / byte_row_norms
+  # A degenerate row must not become NaN: NaN would poison the whole block it
+  # appears in. Zeroed, it scores similarity 0 against everything, i.e. distance
+  # 1, i.e. never a neighbour -- which is what the NaN/NA drop above does.
+  byte_counts[degenerate_rows, ] <- 0
+  byte_counts_t <- t(byte_counts)
+
+  # 2000 rows -> a 2000 x 161,831 block, 2.6 GB, 8.9s measured. This block is the
+  # only large transient in the target; shrink it first if n grows.
+  DIST_MATRIX_BLOCK <- 2000L
+  pair_blocks <- vector('list', ceiling(n_strings / DIST_MATRIX_BLOCK) + 1L)
+  n_pair_blocks <- 0L
+  for (block_start in seq(1L, n_strings, by = DIST_MATRIX_BLOCK)) {
+    block_rows <- block_start:min(block_start + DIST_MATRIX_BLOCK - 1L, n_strings)
+    dist_block <- 1 - (byte_counts[block_rows, , drop = FALSE] %*% byte_counts_t)
+    hits <- which(dist_block < 0.02, arr.ind = TRUE)
+    rm(dist_block)
+    if (nrow(hits) > 0L) {
+      hit_rows <- block_rows[hits[, 1L]]
+      hit_cols <- hits[, 2L]
+      # neighbors[which(neighbors > ind)] in the original, plus the degenerate
+      # rows which the zeroing above already excludes -- kept explicit so the
+      # exclusion does not depend on a floating-point accident.
+      keep <- (hit_cols > hit_rows) &
+        !is_zero_profile[hit_rows] & !is_zero_profile[hit_cols] &
+        !is_na_string[hit_rows] & !is_na_string[hit_cols]
+      if (any(keep)) {
+        n_pair_blocks <- n_pair_blocks + 1L
+        pair_blocks[[n_pair_blocks]] <- cbind(hit_rows[keep], hit_cols[keep])
+      }
+    }
+    rm(hits)
+  }
+  zero_profile_inds <- which(is_zero_profile)
+  if (length(zero_profile_inds) > 1L) {
+    n_pair_blocks <- n_pair_blocks + 1L
+    pair_blocks[[n_pair_blocks]] <- t(utils::combn(zero_profile_inds, 2L))
+  }
+  pairs_found <- do.call(rbind, pair_blocks[seq_len(n_pair_blocks)])
+  rowInds <- as.integer(pairs_found[, 1L])
+  colInds <- as.integer(pairs_found[, 2L])
+  rm(pairs_found, pair_blocks, byte_counts, byte_counts_t)
+  print(Sys.time())
   print(head(rowInds,100))
   print(head(colInds,100))
   # readr::write_rds(rowInds,'rowInds.rds')
