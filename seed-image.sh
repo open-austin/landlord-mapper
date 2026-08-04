@@ -44,8 +44,31 @@ fi
 
 DB="${1:-}"
 if [[ -z "$DB" || ! -f "$DB" ]]; then
-  echo "usage: $0 /path/to/lm.sqlite3   (or --finish)" >&2
+  echo "usage: $0 /path/to/lm.sqlite3      (or a .gz of it, or --finish)" >&2
   exit 2
+fi
+
+# Accept an already-compressed archive. Compressing on the machine that BUILT the
+# database is usually much faster than compressing here -- the box has 128 cores
+# and `pigz -p 16` did 1.80 GB -> 519 MB (28.8%) in well under a minute, then the
+# transfer took 28 s over LAN. Doing it in this script on one core would be the
+# slowest possible arrangement.
+if [[ "$DB" == *.gz ]]; then
+  mkdir -p seed
+  if [[ "$(cd "$(dirname "$DB")" && pwd)/$(basename "$DB")" != "$HERE/seed/lm.sqlite3.gz" ]]; then
+    cp "$DB" seed/lm.sqlite3.gz
+  fi
+  # Integrity of the archive is checkable without decompressing 1.8 GB to disk;
+  # quick_check on the database itself has to wait until the container has it.
+  echo "verifying archive integrity"
+  gzip -t seed/lm.sqlite3.gz
+  echo "  ok, $(wc -c < seed/lm.sqlite3.gz) bytes compressed"
+  echo
+  echo "deploying with the seed included"
+  railway up --service "$SERVICE" --ci
+  echo
+  echo "watch:  railway logs      then:  ./seed-image.sh --finish"
+  exit 0
 fi
 
 # Verify BEFORE spending upload time. quick_check catches the realistic failure
