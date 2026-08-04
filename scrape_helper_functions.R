@@ -1730,7 +1730,17 @@ SCRAPE_WORKERS <- 64
 # before the pool comes up and after it is torn down: turn this DOWN if that
 # number still climbs into the tens of GB, and up only once the log shows the
 # post-teardown floor staying flat across chunks.
-SCRAPE_CHUNK <- 4000
+SCRAPE_CHUNK <- 1000
+# BOX-SPEED: was 4000. A single 4000-key chunk never finished: 90.3 GiB of RSS
+# at 14 minutes with only ~70% of the chunk done, i.e. ~30 MB retained per owner
+# processed, so peak memory is set by keys-per-chunk and 4000 overshot by 2x.
+# 1000 projects to ~30 GiB of pool over a ~10 GiB baseline. It should also be
+# FASTER, not just safer: observed throughput was under 285 owners/min at 64
+# workers versus 353 owners/min at 16 clients in a short-lived probe, while HTTP
+# measured 0.26 s/call with zero throttling and CPU sat at 125-150%. That gap is
+# GC pressure from ~1.4 GiB worker heaps, and small chunks keep heaps small.
+# More pool restarts (91 vs 23) is a cheap trade now that parcel_groups is no
+# longer in the workers' export set.
 
 # BOX-SPEED: how many times to ask about an owner that did not resolve. The CPA API
 # is finicky (owner's words): the same property can return a response or no response
