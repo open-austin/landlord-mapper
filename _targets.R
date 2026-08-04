@@ -81,11 +81,11 @@ library(gargle)
 ## Fetch token. See: https://developers.google.com/identity/protocols/oauth2/scopes
 # scope <-c("https://www.googleapis.com/auth/cloud-platform")
 # token <- token_fetch(scopes = scope)
-gcs_auth(json_file = "landlord-mapper-texas-triangle-72fb0e8772e1.json") # token = readRDS('token.rds'))
+# BOX-NO-GCS # gcs_auth(json_file = "landlord-mapper-texas-triangle-72fb0e8772e1.json") # token = readRDS('token.rds'))
 # Sys.setenv('GAR_CLIENT_JSON'='landlord-mapper-texas-triangle-72fb0e8772e1.json')
-Sys.setenv("GCS_AUTH_FILE" = "landlord-mapper-texas-triangle-72fb0e8772e1.json")
-Sys.setenv("GCS_DEFAULT_BUCKET" = "cad-data-texas-triangle")
-gcs_global_bucket("cad-data-texas-triangle")
+# BOX-NO-GCS # Sys.setenv("GCS_AUTH_FILE" = "landlord-mapper-texas-triangle-72fb0e8772e1.json")
+# BOX-NO-GCS # Sys.setenv("GCS_DEFAULT_BUCKET" = "cad-data-texas-triangle")
+# BOX-NO-GCS # gcs_global_bucket("cad-data-texas-triangle")
 # 
 project <- "Landlord-Mapper-Texas-Triangle"
 tar_option_set(
@@ -131,13 +131,14 @@ tar_option_set(
   # sets a controller that scales up to a maximum of two workers
   # which run as local R processes. Each worker launches when there is work
   # to do and exits if 60 seconds pass with no tasks to run.
-  resources = tar_resources(gcp = tar_resources_gcp(bucket = gcs_get_global_bucket(),
-                                                    prefix = "Landlord-Mapper-Texas-Triangle",
-                                                    predefined_acl = 'bucketLevel')
-  ),
-  repository = 'gcp',
-  repository_meta = 'gcp',
-  controller = crew::crew_controller_local(workers = parallel::detectCores(),
+# BOX-LOCAL-STORE #   resources = tar_resources(gcp = tar_resources_gcp(bucket = gcs_get_global_bucket(),
+# BOX-LOCAL-STORE #                                                     prefix = "Landlord-Mapper-Texas-Triangle",
+# BOX-LOCAL-STORE #                                                     predefined_acl = 'bucketLevel')
+# BOX-LOCAL-STORE #   ),
+# BOX-LOCAL-STORE #   repository = 'gcp',
+# BOX-LOCAL-STORE #   repository_meta = 'gcp',
+  controller = crew::crew_controller_local(workers = 16,  # BOX-PARALLEL bounded
+
                                            seconds_idle = 10)
   #
   # Alternatively, if you want workers to run on a high-performance computing
@@ -192,97 +193,75 @@ list(
   tar_target(
     name = propChar_data,
     command = {
-      
-      print('propChar')
-      print(tcad_data_get)
-      TCAD_parseYear_propChar(list.files()[grepl('tcad_special_export.zip',
-                                                 list.files())])
-      read.csv('austin_propertyChar_data.csv',
-               row.names = 'X')
-    },
-    deployment = 'main'),
+      # BOX-PARALLEL: keep referencing tcad_data_get so the
+      # download-before-parse dependency edge survives moving this
+      # target off the main session.
+      stopifnot(!is.null(tcad_data_get))
+      tcad_parse_dispatch("propChar")
+    }),
   tar_target(
     name = propProf_data,
     command = {
-      
-      print('propProf')
-      print(tcad_data_get)
-      TCAD_parseYear_propProf(list.files()[grepl('tcad_special_export.zip',
-                                                         list.files())])
-      read.csv('austin_propertyProf_data.csv',
-               row.names = 'X')
-      },
-    deployment = 'main'),
+      # BOX-PARALLEL: keep referencing tcad_data_get so the
+      # download-before-parse dependency edge survives moving this
+      # target off the main session.
+      stopifnot(!is.null(tcad_data_get))
+      tcad_parse_dispatch("propProf")
+    }),
   tar_target(
     name = legal_data,
     command = {
-      
-      print('legal')
-      print(tcad_data_get)
-      TCAD_parseYear_legal(list.files()[grepl('tcad_special_export.zip',list.files())])
-      read.csv('austin_propertyLegal_data.csv',
-               row.names = 'X')
-      },
-    deployment = 'main'),
+      # BOX-PARALLEL: keep referencing tcad_data_get so the
+      # download-before-parse dependency edge survives moving this
+      # target off the main session.
+      stopifnot(!is.null(tcad_data_get))
+      tcad_parse_dispatch("legal")
+    }),
   tar_target(
     name = situs_data,
     command = {
-      
-      print('situs')
-      print(tcad_data_get)
-      TCAD_parseYear_situs(list.files()[grepl('tcad_special_export.zip',list.files())])
-      read.csv('austin_situs_data.csv',
-               row.names = 'X')
-      },
-    deployment = 'main'
-    ),
+      # BOX-PARALLEL: keep referencing tcad_data_get so the
+      # download-before-parse dependency edge survives moving this
+      # target off the main session.
+      stopifnot(!is.null(tcad_data_get))
+      tcad_parse_dispatch("situs")
+    }),
   tar_target(
     name = owner_data,
     command = {
-      
-      print('owner')
-      print(tcad_data_get)
-      TCAD_parseYear_owner(list.files()[grepl('tcad_special_export.zip',list.files())])
-      read.csv('austin_owner_data.csv',
-               row.names = 'X')
-      },
-    deployment = 'main'),
+      # BOX-PARALLEL: keep referencing tcad_data_get so the
+      # download-before-parse dependency edge survives moving this
+      # target off the main session.
+      stopifnot(!is.null(tcad_data_get))
+      tcad_parse_dispatch("owner")
+    }),
   tar_target(
     name = agent_data,
     command = {
-      
-      print('agent')
-      print(tcad_data_get)
-      TCAD_parseYear_agent(list.files()[grepl('tcad_special_export.zip',list.files())])
-      read.csv('austin_agent_data.csv',
-               row.names = 'X')
-      },
-    deployment = 'main'),
+      # BOX-PARALLEL: keep referencing tcad_data_get so the
+      # download-before-parse dependency edge survives moving this
+      # target off the main session.
+      stopifnot(!is.null(tcad_data_get))
+      tcad_parse_dispatch("agent")
+    }),
   tar_target(
     name = ownerValue_data,
     command = {
-      
-      print('ownerValue')
-      print(tcad_data_get)
-      TCAD_parseYear_ownerValue(list.files()[grepl('tcad_special_export.zip',
-                                                           list.files())])
-      read.csv('austin_ownerValue_data.csv',
-               row.names = 'X')
-      },
-    deployment = 'main'),
+      # BOX-PARALLEL: keep referencing tcad_data_get so the
+      # download-before-parse dependency edge survives moving this
+      # target off the main session.
+      stopifnot(!is.null(tcad_data_get))
+      tcad_parse_dispatch("ownerValue")
+    }),
   tar_target(
     name = deed_data,
     command = {
-      
-      print('deeds')
-      print(tcad_data_get)
-      
-      TCAD_parseYear_deeds(list.files()[grepl('tcad_special_export.zip',
-                                                      list.files())])
-      read.csv('austin_deeds_data.csv',
-               row.names = 'X')
-      },
-    deployment = 'main'),
+      # BOX-PARALLEL: keep referencing tcad_data_get so the
+      # download-before-parse dependency edge survives moving this
+      # target off the main session.
+      stopifnot(!is.null(tcad_data_get))
+      tcad_parse_dispatch("deeds")
+    }),
 
   tar_target(deed_summ_data,
              command = {

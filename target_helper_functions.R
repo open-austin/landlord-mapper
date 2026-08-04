@@ -451,3 +451,36 @@ code_compl_merge = function(austin_parcel_data_merged,
   austin_parcel_data_merged
 }
 
+
+# BOX-PARALLEL: the eight TCAD parse targets each make their own full streaming
+# pass over the same appraisal export and are mutually independent, but they were
+# pinned to the main session so they ran serially at ~14 minutes apiece.
+#
+# They cannot be handed to a worker directly: reticulate exposes the Python
+# parsers as external pointers, which do not serialise across a process boundary.
+# So this wrapper takes a plain string, re-sources the Python module inside the
+# worker that runs it, and returns a plain data frame. Only R objects cross.
+TCAD_PARSE_OUTPUTS <- c(
+  propChar   = "austin_propertyChar_data.csv",
+  propProf   = "austin_propertyProf_data.csv",
+  legal      = "austin_propertyLegal_data.csv",
+  situs      = "austin_situs_data.csv",
+  owner      = "austin_owner_data.csv",
+  agent      = "austin_agent_data.csv",
+  ownerValue = "austin_ownerValue_data.csv",
+  deeds      = "austin_deeds_data.csv"
+)
+
+tcad_parse_dispatch <- function(kind) {
+  if (!kind %in% names(TCAD_PARSE_OUTPUTS)) stop("unknown TCAD parse kind: ", kind)
+  out_csv <- TCAD_PARSE_OUTPUTS[[kind]]
+  py <- new.env(parent = globalenv())
+  reticulate::source_python("TCAD_parse.py", envir = py)
+  zips <- list.files()[grepl("tcad_special_export.zip", list.files())]
+  if (!length(zips)) stop("tcad_special_export.zip not found in ", getwd())
+  parser <- get(paste0("TCAD_parseYear_", kind), envir = py, inherits = FALSE)
+  message("[tcad_parse_dispatch] ", kind, " on pid ", Sys.getpid())
+  parser(zips[[1]])
+  if (!file.exists(out_csv)) stop("parser produced no ", out_csv)
+  read.csv(out_csv, row.names = "X")
+}

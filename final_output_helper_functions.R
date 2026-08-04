@@ -1030,7 +1030,6 @@ situs_neighor_gen_final = function(owner_data_used,
   matched_owners_inds_uniq <- matched_owners_inds_uniq[order(sapply(matched_owners_inds_uniq,
                                                                     length),
                                                              decreasing = TRUE)]
-  )
   # daemons(parallel::detectCores())
   # mirai::mirai_map(1:length(matched_owners_inds_uniq),
   #                  function(index) {

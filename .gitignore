@@ -169,3 +169,7 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# BOX: runtime credential, never commit
+cpa_key.txt
+owner_data_part_*.csv

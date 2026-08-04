@@ -1109,8 +1109,16 @@ ingest_proton_pacs_cad_data = function(zipfile_used){
   counties <- counties[!grepl('Travis|Hays|Williams', counties, ignore.case = TRUE)]
   print(folder)
   print(counties)
+  # BOX-PARALLEL-PACS: was %do% (serial, one core). ingest_cad_zip_data()
+  # unzips each county into its own file.path(tempdir(), county), so counties
+  # share no scratch path and are safe concurrently. Bounded well under
+  # detectCores() because each county holds a full county of rows in memory.
+  doFuture::registerDoFuture()
+  future::plan(future::multisession,
+               workers = max(1, min(length(counties), 8)))
+  on.exit(future::plan(future::sequential), add = TRUE)
   cad_data <- foreach::foreach(county = counties,
-                               .combine = 'rbind') %do% {
+                               .combine = 'rbind') %dopar% {
                                  gc()
                                  print(county)
                                 
@@ -1461,15 +1469,80 @@ colnames_used <- c('owner_name_scraped',
 
 #
 
+# BOX-SPEED: owner-scrape concurrency. Was 12, chosen while we were spending the
+# upstream owner's API quota and politeness was the binding constraint. He has since
+# confirmed the key has no cost ceiling for this volume, so the only limit left is
+# the API's rate ceiling. This is network-bound HTTP, so it can exceed core count
+# freely.
+SCRAPE_WORKERS <- 48
+
+# BOX-SPEED: how many times to ask about an owner that did not resolve. The CPA API
+# is finicky (owner's words): the same property can return a response or no response
+# depending on when you ask, so a no-result is not a durable fact and must not be
+# cached. Two passes, because ~41% of owners genuinely have no franchise record and
+# each extra pass re-asks ~39k questions that will keep answering "no" -- a third
+# pass would cost more lookups than skipping the dedup entirely.
+SCRAPE_RETRY_PASSES <- 2
+
+# BOX-FIX: fold per-worker scrape part files into owner_data_total.csv.
+#
+# The scrape loops used to have every parallel worker append to one shared
+# owner_data_total.csv, which races. Workers now each append to their own
+# owner_data_part_<pid>.csv and this collapses them afterwards.
+#
+# Called at owner_scrape_actual() entry as well as after the loop, so parts left
+# by a crashed run are recovered into owner_data_total.csv before the resume
+# check reads it -- otherwise a crash would silently re-scrape everything.
+consolidate_owner_parts = function() {
+  parts <- list.files(pattern = '^owner_data_part_[0-9]+[.]csv$')
+  if (!length(parts)) {
+    return(invisible(FALSE))
+  }
+  read_one <- function(p) {
+    tryCatch(data.table::fread(p, colClasses = 'character', showProgress = FALSE),
+             error = function(e) NULL)
+  }
+  chunks <- Filter(Negate(is.null), lapply(parts, read_one))
+  chunks <- Filter(function(d) nrow(d) > 0, chunks)
+  if (!length(chunks)) {
+    file.remove(parts)
+    return(invisible(FALSE))
+  }
+  combined <- data.table::rbindlist(chunks, use.names = TRUE, fill = TRUE)
+  if (file.exists('owner_data_total.csv')) {
+    prev <- read_one('owner_data_total.csv')
+    if (!is.null(prev) && nrow(prev)) {
+      combined <- data.table::rbindlist(list(prev, combined),
+                                        use.names = TRUE, fill = TRUE)
+    }
+  }
+  # A property can legitimately be attempted twice across a crash/resume; keep
+  # the last write for each parcel.
+  combined <- unique(combined, by = c('situs_pID', 'situs_address'),
+                     fromLast = TRUE)
+  data.table::fwrite(combined, 'owner_data_total.csv', sep = ',')
+  file.remove(parts)
+  message('[consolidate_owner_parts] folded ', length(parts), ' part file(s) -> ',
+          nrow(combined), ' rows')
+  invisible(TRUE)
+}
+
 owner_scrape_actual = function(austin_parcel_data_merged
                               ){
+  # BOX-SPEED: backoff hardened for higher concurrency. At SCRAPE_WORKERS clients a
+  # rate-limit rejection is likely, and it surfaces as an exception -- which the
+  # pass loop below now treats as "ask again later" rather than as empty data.
+  # Was max_times = 2 with pause_cap = 5.
   insist_scrape_owner = purrr:::insistently(scrape_owner_api,
-                                            rate =purrr::rate_backoff(pause_base = 2,#5,
-                                                                pause_cap = 5,#30,
+                                            rate =purrr::rate_backoff(pause_base = 2,
+                                                                pause_cap = 30,
                                                                 pause_min = 2,
-                                                                max_times = 2,
+                                                                max_times = 5,
                                                                 jitter = TRUE
                                             ))
+  # BOX-FIX: recover any part files from a previous interrupted run before the
+  # size check below decides between the resume and fresh-start branches.
+  consolidate_owner_parts()
   if(is.na(file.size('owner_data_total.csv'))|
      file.size('owner_data_total.csv')<40000000){
     # print('1')
@@ -1479,104 +1552,120 @@ owner_scrape_actual = function(austin_parcel_data_merged
                                          (is_owner_occupied==FALSE))|
                                         (property_units>5),
                                       property_units!=0)
+    # Resume: drop parcels already recorded. consolidate_owner_parts() above has
+    # already folded in part files from an interrupted run, so this sees them.
     if(!is.na(file.size('owner_data_total.csv'))){
       target_owner_info <- read.csv('owner_data_total.csv')
       target_properties <- dplyr::filter(target_properties,
-                                         (as.numeric(situs_pID) %in% 
+                                         (as.numeric(situs_pID) %in%
                                             as.numeric(unique(target_owner_info$situs_pID))==FALSE ))
       print(dim(target_properties))
-      registerDoFuture()
-      plan(multisession, workers = parallel::detectCores())
-      target_owner_info = foreach(index =1:nrow(target_properties),
-                                  .combine = 'rbind',
-                                  .options.RNG = 8989,
-                                  .export = financial_marker_string) %dopar% {
-                                    # print(index)
-                                    owner_name =target_properties$owner_name[index]
-                                    owner_address = target_properties$owner_address[index]
-                                    situs_pID = target_properties$situs_pID[index]
-                                    situs_address = target_properties$situs_address[index]
-                                  
-                                    # print(situs_pID)
-                                    # print(situs_address)
-                                    # print(owner_name)
-                                    # print(owner_address)
-                                    property_owner_info <- tryCatch({insist_scrape_owner(owner_name,
-                                                                                         situs_pID = situs_pID ,
-                                                                                         situs_address = situs_address,
-                                                                                         veneer_owner = owner_name,
-                                                                                         veneer_owner_mail_address = owner_address)},
-                                                                    error=function(cond){
-                                                                      cond}
-                                                                    )
-                                    # print(property_owner_info)
-                                    if((is.null(property_owner_info)) |
-                                       ('error' %in% class(property_owner_info))){
-                                      # print('not found')
-                                      property_owner_info <- data.frame(t(c(rep(NA, 14),
-                                                                            situs_pID,
-                                                                            situs_address)
-                                      ))
-                                    }
-                                    
-                                    # print(dim(data.frame(as.matrix(property_owner_info))))
-                                    # print(data.frame(as.matrix(property_owner_info)))
-                                    colnames(property_owner_info) <- colnames_used
-                                    # print(property_owner_info)
-                                    # print('write')
-                                    data.table::fwrite(property_owner_info,
+    }
 
-                                                       'owner_data_total.csv',
-                                                       append = TRUE,
-                                                       sep = ','
-                                                       )
-                                    return(NULL)
-                                  }
+    if(nrow(target_properties) > 0){
+      # BOX-SPEED: one lookup per distinct owner, expanded back out to that owner's
+      # parcels inside the worker. (owner_name, owner_address) is the complete and
+      # correct key -- see this file's patch header for why.
+      #
+      # Slimmed to the four columns the loop needs before fanning out: the full
+      # frame is 21 columns and each of SCRAPE_WORKERS sessions gets its own copy.
+      tp_slim <- target_properties[, c('owner_name', 'owner_address',
+                                       'situs_pID', 'situs_address')]
+      owner_keys <- unique(tp_slim[, c('owner_name', 'owner_address')])
+
+      # Expand one owner's answer out to every parcel that owner holds. A lookup can
+      # legitimately return several rows (one per officer), so this crosses
+      # answer-rows by parcels.
+      expand_to_parcels <- function(answer, parcels) {
+        do.call(rbind, lapply(seq_len(nrow(parcels)), function(p) {
+          row <- answer
+          row$situs_pID     <- parcels$situs_pID[p]
+          row$situs_address <- parcels$situs_address[p]
+          row
+        }))
+      }
+      parcels_for <- function(nm, addr) {
+        tp_slim[tp_slim$owner_name == nm & tp_slim$owner_address == addr,
+                c('situs_pID', 'situs_address'), drop = FALSE]
+      }
+
+      doFuture::registerDoFuture()
+      future::plan(future::multisession, workers = SCRAPE_WORKERS)
+      on.exit(future::plan(future::sequential), add = TRUE)
+
+      message('[owner_scrape] ', nrow(tp_slim), ' parcels -> ',
+              nrow(owner_keys), ' distinct owners, ', SCRAPE_WORKERS, ' workers')
+
+      # Keys still to resolve. A key leaves this set only by producing a real
+      # answer; an error or a NULL leaves it pending for the next pass, because a
+      # no-response from this API is not durable.
+      pending <- seq_len(nrow(owner_keys))
+
+      for (pass in seq_len(SCRAPE_RETRY_PASSES)) {
+        if (!length(pending)) break
+        message('[owner_scrape] pass ', pass, '/', SCRAPE_RETRY_PASSES,
+                ': ', length(pending), ' owners to look up')
+
+        still_pending <- foreach(key_index = pending,
+                                 .combine = 'c',
+                                 .options.RNG = 8989,
+                                 .export = financial_marker_string) %dopar% {
+          owner_name    <- owner_keys$owner_name[key_index]
+          owner_address <- owner_keys$owner_address[key_index]
+
+          # situs_* are pass-through labels for the lookup, so the first parcel's
+          # are fine; each parcel gets its own stamped copy in expand_to_parcels().
+          parcels <- parcels_for(owner_name, owner_address)
+          answer <- tryCatch({
+            insist_scrape_owner(owner_name,
+                                situs_pID = parcels$situs_pID[1],
+                                situs_address = parcels$situs_address[1],
+                                veneer_owner = owner_name,
+                                veneer_owner_mail_address = owner_address)
+          }, error = function(cond){ cond })
+
+          if (is.null(answer) || ('error' %in% class(answer))) {
+            return(key_index)   # write nothing; ask again next pass
+          }
+
+          colnames(answer) <- colnames_used
+          .pf <- sprintf('owner_data_part_%d.csv', Sys.getpid())
+          data.table::fwrite(expand_to_parcels(answer, parcels),
+                             .pf,
+                             append = file.exists(.pf),
+                             sep = ',')
+          return(NULL)
+        }
+
+        resolved_this_pass <- length(pending) - length(still_pending)
+        message('[owner_scrape] pass ', pass, ': resolved ', resolved_this_pass,
+                ', still pending ', length(still_pending))
+        pending <- still_pending
+      }
+
+      # Whatever never resolved is recorded as empty, same as the original
+      # behaviour -- but only after being asked SCRAPE_RETRY_PASSES times rather
+      # than once, so a transient refusal is not mistaken for "no such entity".
+      if (length(pending)) {
+        message('[owner_scrape] writing ', length(pending),
+                ' unresolved owners as empty rows')
+        empty <- data.frame(t(c(rep(NA, 14), NA, NA)))
+        colnames(empty) <- colnames_used
+        .pf <- sprintf('owner_data_part_%d.csv', Sys.getpid())
+        for (key_index in pending) {
+          parcels <- parcels_for(owner_keys$owner_name[key_index],
+                                 owner_keys$owner_address[key_index])
+          data.table::fwrite(expand_to_parcels(empty, parcels),
+                             .pf,
+                             append = file.exists(.pf),
+                             sep = ',')
+        }
+      }
     }
-    else{
-      target_owner_info = foreach(index =1:nrow(target_properties),
-                                  .combine = 'rbind',
-                                  .options.RNG = 8989,
-                                  .export = financial_marker_string) %dopar% {
-                                    # print(index)
-                                    owner_name =target_properties$owner_name[index]
-                                    owner_address = target_properties$owner_address[index]
-                                    situs_pID = target_properties$situs_pID[index]
-                                    situs_address = target_properties$situs_address[index]
-                                    
-                                    
-                                    property_owner_info <- tryCatch({insist_scrape_owner(owner_name,
-                                                                                         situs_pID = situs_pID ,
-                                                                                         situs_address = situs_address,
-                                                                                         veneer_owner = owner_name,
-                                                                                         veneer_owner_mail_address = owner_address)},
-                                                                    error=function(cond){
-                                                                      cond}
-                                    )
-                                    # print(property_owner_info)
-                                    if((is.null(property_owner_info)) |
-                                       ('error' %in% class(property_owner_info))){
-                                      property_owner_info <- data.frame(t(c(rep(NA, 14),
-                                                                            situs_pID,
-                                                                            situs_address)
-                                      ))
-                                    }
-                                    first_prop <- index!=1
-                                    colnames(property_owner_info) <- colnames_used
-                                    data.table::fwrite(property_owner_info,
-                                                       
-                                                       'owner_data_total.csv',
-                                                       append = first_prop,
-                                                       sep = ','
-                                    )
-                                    return(NULL)
-                                  }
-    }
-    print(dim(target_properties))
-    
-    
   }
   print('done')
+  # BOX-FIX: collapse this run's per-worker part files before reading the total.
+  consolidate_owner_parts()
   target_owner_info <- read.csv('owner_data_total.csv')
   
   # austin_parcel_data_merged <- qs2::qs_read("_targets\\objects\\austin_parcel_data_merged_code")
