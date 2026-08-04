@@ -85,8 +85,13 @@ for part in "$WORK"/lm.sqlite3.gz.part-*; do
   echo
   echo "=== deploy $i of $N: $name ($(wc -c < "$part") bytes) ==="
   railway up --service "$SERVICE" --ci || {
-    echo "deploy of $name failed. Parts already staged on the volume are kept," >&2
-    echo "so rerunning this script resumes rather than starting over." >&2
+    # Clear seed/ on the way out. Leaving a 350 MB part in the working directory
+    # makes the NEXT unrelated `railway up` from here fail with the same 413,
+    # which is a genuinely confusing failure to debug -- it looks like the code
+    # deploy is too large. Learned the hard way.
+    rm -rf seed
+    echo "deploy of $name failed; cleared seed/ so later deploys are not oversized." >&2
+    echo "Parts already staged on the volume are kept, so rerunning resumes." >&2
     exit 1
   }
 done

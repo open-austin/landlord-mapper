@@ -10,20 +10,26 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-# NO healthcheckPath on purpose, and this is the one setting worth explaining.
+# The healthcheck is the one setting here worth explaining, because it could not
+# be enabled on the first deploy and can be now.
 #
-# /health is a good healthcheck -- 200 in ~1.4 ms, and it touches the database so
-# it genuinely fails when the volume is unreadable. But it cannot be enabled on
-# the FIRST deploy: the volume starts empty, entrypoint.sh sits in its wait loop
-# until the database is streamed in, and a healthcheck would fail the deployment
-# before there is a running container to `railway ssh` into. That is the same
-# deadlock the wait loop exists to break, reintroduced one layer up.
+# /health is a good check -- 200 in ~1.4 ms, and it touches the database so it
+# genuinely fails when the volume is unreadable. But on the FIRST deploy the
+# volume is empty, entrypoint.sh sits in its wait loop until the database
+# arrives, and a healthcheck would have failed the deployment before there was a
+# running container to seed into at all. That is the same deadlock the wait loop
+# exists to break, reintroduced one layer up.
 #
-# Once the volume is seeded and the service is serving, add:
-#     healthcheckPath = "/health"
-#     healthcheckTimeout = 30
-# From then on the volume is persistent, so restarts find the database in place
-# and the healthcheck is only ever reporting real failures.
+# ENABLED 2026-08-04, once the volume was seeded and the service verified
+# serving. The volume is persistent, so restarts find the database already in
+# place and this check now only ever reports real failures.
+#
+# Timeout is 60 rather than 30: a cold container has to open a 1.7 GB file and
+# the observed first-request latency on this host was ~0.4 s, but a restart that
+# coincides with a re-seed would take longer, and a healthcheck that fires early
+# would kill a container that is legitimately working.
+healthcheckPath = "/health"
+healthcheckTimeout = 60
 
 # The server holds no request state between requests and the database is opened
 # read-only, so a restart is always safe. ON_FAILURE rather than ALWAYS so a
