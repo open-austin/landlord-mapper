@@ -301,9 +301,18 @@ list(
   #                             code_complaint_data),
   #            deployment = 'main'),
   tar_target(austin_parcel_data_merged_owner,
-             owner_scrape_actual(austin_parcel_data_merged)
-             # deployment = 'main'
-             ),
+             owner_scrape_actual(austin_parcel_data_merged),
+             # BOX-FIX: the scrape opens one socket per parallel worker, and R's
+             # connection ceiling is per PROCESS. The container launches the main
+             # session with --max-connections=512, but a crew worker is a separate
+             # R process that never sees that flag and is stuck on the stock 128 --
+             # so running here failed outright with "Cannot create 128 parallel
+             # PSOCK nodes ... only 124 connections left". Pinning to the main
+             # session puts the scrape in the process that actually has the raised
+             # ceiling. `deployment` is not part of a target's hash, so this
+             # invalidates nothing, and the scrape is the only heavy work at this
+             # stage so nothing else wants the crew workers.
+             deployment = 'main'),
   tar_target(situs_owner_strings,
              command = {
                # if((is.na(file.size(tar_read_raw('situs_owner_strings')))|

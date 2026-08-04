@@ -1674,7 +1674,29 @@ owner_scrape_actual = function(austin_parcel_data_merged
       stopifnot(length(parcel_groups) == nrow(owner_keys))
 
       doFuture::registerDoFuture()
-      future::plan(future::multisession, workers = SCRAPE_WORKERS)
+
+      # BOX-FIX: never ask for more workers than this process can open sockets
+      # for. Each multisession worker costs one connection, and R's ceiling is
+      # per process -- the container raises it for the main session only, so a
+      # target running anywhere else silently has far less headroom. Asking for
+      # too many is a hard startup failure, not a slowdown, which is how this
+      # scrape died once already. Clamp instead, and say so in the log: a wrong
+      # SCRAPE_WORKERS should cost throughput, never the whole run.
+      scrape_workers_used <- SCRAPE_WORKERS
+      .free_conn <- tryCatch(parallelly::freeConnections(),
+                             error = function(e) NA_integer_)
+      if (!is.na(.free_conn)) {
+        # Leave a margin: fwrite, the API client and targets itself all need
+        # connections of their own while the pool is up.
+        scrape_workers_used <- max(1L, min(SCRAPE_WORKERS, .free_conn - 12L))
+      }
+      if (scrape_workers_used < SCRAPE_WORKERS) {
+        message('[owner_scrape] clamped workers ', SCRAPE_WORKERS, ' -> ',
+                scrape_workers_used, ' (', .free_conn,
+                ' R connections free in this process)')
+      }
+
+      future::plan(future::multisession, workers = scrape_workers_used)
       on.exit(future::plan(future::sequential), add = TRUE)
 
       # BOX-FIX: parcel_groups is ~34 MiB and legitimately has to reach every
@@ -1686,7 +1708,8 @@ owner_scrape_actual = function(austin_parcel_data_merged
       on.exit(options(future.globals.maxSize = .old_max), add = TRUE)
 
       message('[owner_scrape] ', nrow(tp_slim), ' parcels -> ',
-              nrow(owner_keys), ' distinct owners, ', SCRAPE_WORKERS, ' workers')
+              nrow(owner_keys), ' distinct owners, ', scrape_workers_used,
+              ' workers')
 
       # Keys still to resolve. A key leaves this set only by producing a real
       # answer; an error or a NULL leaves it pending for the next pass, because a
