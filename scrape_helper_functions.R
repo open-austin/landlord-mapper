@@ -1677,7 +1677,15 @@ colnames_scraped <- setdiff(colnames_used, 'scrape_status')
 # confirmed the key has no cost ceiling for this volume, so the only limit left is
 # the API's rate ceiling. This is network-bound HTTP, so it can exceed core count
 # freely.
-SCRAPE_WORKERS <- 64
+SCRAPE_WORKERS <- 16
+# BOX-SPEED: was 64, and before that 128. Process-level evidence from a live run
+# settles this: 64 workers at 2,061 MB EACH (uniform, so baseline not leak), 64 of
+# 65 processes BLOCKED, main session the only one running and holding 3,447 MB.
+# 64 x 2 GB is 128 GB of payload the main session must serialise before any worker
+# can start, so high worker counts buy blocked processes and a serialisation
+# bottleneck rather than parallelism. 16 is also the concurrency the standalone
+# probe actually validated: 353 owners/min, HTTP 0.26 s/call, zero throttling at
+# any concurrency tested. 16 x 2 GB + main = ~36 GB.
 # BOX-SPEED: lowered from 128. The previous entry here argued that once a
 # non-answer is recorded as `not_resolved` instead of a fake all-NA row,
 # over-driving the API costs time instead of corrupting output, so the ceiling
@@ -1730,7 +1738,13 @@ SCRAPE_WORKERS <- 64
 # before the pool comes up and after it is torn down: turn this DOWN if that
 # number still climbs into the tens of GB, and up only once the log shows the
 # post-teardown floor staying flat across chunks.
-SCRAPE_CHUNK <- 1000
+SCRAPE_CHUNK <- 10000
+# BOX-SPEED: was 1000, and 4000 before that. Raising it is correct once the cost
+# is understood: re-planning the pool re-serialises ~2 GB per worker, so 90 small
+# chunks paid that 90 times and throughput got WORSE, not better. Cutting chunk
+# size to fix memory was treating worker count's symptom. Chunking stays to bound
+# genuine per-owner retention above the baseline, but 9 restarts is enough; the
+# per-chunk RSS lines will show whether anything still ratchets.
 # BOX-SPEED: was 4000. A single 4000-key chunk never finished: 90.3 GiB of RSS
 # at 14 minutes with only ~70% of the chunk done, i.e. ~30 MB retained per owner
 # processed, so peak memory is set by keys-per-chunk and 4000 overshot by 2x.
