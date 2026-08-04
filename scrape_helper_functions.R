@@ -1530,14 +1530,60 @@ colnames_scraped <- setdiff(colnames_used, 'scrape_status')
 # confirmed the key has no cost ceiling for this volume, so the only limit left is
 # the API's rate ceiling. This is network-bound HTTP, so it can exceed core count
 # freely.
-SCRAPE_WORKERS <- 128
-# BOX-SPEED: raised from 48. 48 was the right number only while a throttled
-# request was indistinguishable from "no such entity" -- both wrote an all-NA
-# row -- so pushing the API risked silently inventing false negatives. Now that
-# a non-answer is recorded as `not_resolved` and re-asked, over-driving the API
-# costs time and shows up in the status counts rather than corrupting the
-# output. So find the ceiling empirically: if not_resolved comes back large,
-# turn this down. Network-bound HTTP on a 128-core / 188 GB host.
+SCRAPE_WORKERS <- 64
+# BOX-SPEED: lowered from 128. The previous entry here argued that once a
+# non-answer is recorded as `not_resolved` instead of a fake all-NA row,
+# over-driving the API costs time instead of corrupting output, so the ceiling
+# could be found empirically. That argument stands -- and it has now been
+# spent. We ran the experiment and the answer is that the API is the ceiling,
+# not us:
+#
+#    48 workers   ~700-870 rows/min
+#   128 workers   ~894 rows/min
+#
+# 2.7x the workers bought under 30% throughput, and CPU sat at 140-220% of a
+# possible 12800% (1.5-2 cores out of 128), so none of this is compute-bound --
+# we are queued behind the CPA API's own latency and rate limits and more
+# clients do not move that.
+#
+# Memory, meanwhile, scales linearly in workers, because each `multisession`
+# worker is a persistent R process whose RSS only ever ratchets upward (R does
+# not return freed memory to the OS). The 128-worker run measured:
+#
+#   ~10 min    71.8 GiB container RSS    79 GB host free
+#   ~17 min   114.2 GiB                  37 GB
+#   ~18 min   120.7 GiB                  30 GB
+#   ~19 min   127.3 GiB                  23 GB
+#
+# ~6.5 GB/min of monotonic growth on a 188 GB host. It was minutes from OOM and
+# was killed by hand. So a high worker count buys nothing and costs everything;
+# 64 halves the ratchet rate for no measurable throughput loss. This is only the
+# cheap half of the fix -- the structural half is SCRAPE_CHUNK below.
+
+# BOX-FIX: how many owner keys to process before the worker pool is destroyed
+# and rebuilt. This is the actual fix for the growth measured above.
+#
+# The leak is not a bug that can be found and deleted. R does not hand freed
+# memory back to the OS, so a worker that processes thousands of owners in
+# sequence simply ratchets its RSS up to its own high-water mark and holds it.
+# The pool used to be established once, before the pass loop, and stay up for an
+# entire pass (~95k keys), so nothing reclaimed any of it until the target
+# finished. Killing the process is the only reclaim available, so the pass is
+# now chunked and the pool is recycled between chunks.
+#
+# Sizing. The measured ~6.5 GB/min at ~894 rows/min is ~550 distinct owners/min
+# (~95k owners expand to ~153k parcel rows), i.e. roughly 12 MB retained per
+# owner processed. If the ratchet tracks owners processed rather than worker
+# count -- and the near-flat CPU says it is the work that allocates, not the
+# pool -- then CHUNK SIZE, not SCRAPE_WORKERS, is what sets the peak. 4000 keys
+# x ~12 MB is a ~48 GB ceiling per chunk, about a quarter of the 188 GB host,
+# leaving room for the UI container and the rest of the targets pipeline. It is
+# also ~7 minutes of work per chunk at the measured rate, so the few seconds
+# spent spinning up 64 PSOCK nodes is under 2% overhead. Each chunk logs RSS
+# before the pool comes up and after it is torn down: turn this DOWN if that
+# number still climbs into the tens of GB, and up only once the log shows the
+# post-teardown floor staying flat across chunks.
+SCRAPE_CHUNK <- 4000
 
 # BOX-SPEED: how many times to ask about an owner that did not resolve. The CPA API
 # is finicky (owner's words): the same property can return a response or no response
@@ -1569,6 +1615,32 @@ expand_to_parcels <- function(answer, parcels) {
     row$situs_address <- parcels$situs_address[p]
     row
   }))
+}
+
+# BOX-FIX: report memory so a run's own log answers "is the ratchet bounded?"
+# instead of requiring someone to sit watching `docker stats` for 20 minutes --
+# which is how the 128-worker blowup was caught, by hand, minutes from an OOM.
+#
+# Sums resident pages over every process in this PID namespace, which inside the
+# container is the main R session plus whatever worker pool is currently up, so
+# the number is directly comparable to the `docker stats` figures quoted at
+# SCRAPE_WORKERS. It over-counts pages shared between processes (cgroup
+# accounting charges those once), but `multisession` workers are spawned PSOCK
+# nodes rather than forks, so the overlap is small. Linux-only by construction;
+# returns NA anywhere /proc is absent, and never throws -- a logging helper must
+# not be able to kill a six-hour scrape.
+container_rss_gb <- function() {
+  tryCatch({
+    pids <- list.files('/proc', pattern = '^[0-9]+$')
+    pages <- vapply(pids, function(p) {
+      v <- tryCatch(scan(file.path('/proc', p, 'statm'), what = 0, n = 2,
+                         quiet = TRUE),
+                    error = function(e) numeric(0),
+                    warning = function(e) numeric(0))
+      if (length(v) < 2) 0 else v[2]
+    }, numeric(1), USE.NAMES = FALSE)
+    round(sum(pages) * 4096 / 1024^3, 1)
+  }, error = function(e) NA_real_)
 }
 
 # BOX-FIX: fold per-worker scrape part files into owner_data_total.csv.
@@ -1696,13 +1768,25 @@ owner_scrape_actual = function(austin_parcel_data_merged
                 ' R connections free in this process)')
       }
 
-      future::plan(future::multisession, workers = scrape_workers_used)
+      # BOX-FIX: the pool is NOT established here any more. It is established
+      # and destroyed once per chunk inside the pass loop below, because that
+      # teardown is the only thing that ever reclaims worker RSS -- see
+      # SCRAPE_CHUNK. This on.exit stays purely as a safety net, so that an
+      # error anywhere below cannot leave 64 orphaned R processes sitting on the
+      # host's memory.
       on.exit(future::plan(future::sequential), add = TRUE)
 
-      # BOX-FIX: parcel_groups is ~34 MiB and legitimately has to reach every
-      # worker, which is over future's cautious 500 MiB default once the rest of
-      # the exported set is counted. Raise it for this call only. This is a
-      # deliberate export, not the accidental frame capture that crashed the run.
+      # BOX-FIX: future's cautious 500 MiB globals ceiling is too low for this
+      # loop's exported set, and re-planning per chunk re-exports that set on
+      # every chunk, so the headroom is wanted more than once. Raise it for this
+      # call only. This is a deliberate export, not the accidental frame capture
+      # that crashed the run.
+      #
+      # parcel_groups (~34 MiB) and owner_keys are deliberately NOT in that set
+      # any more. Exporting them wholesale would have cost 34 MiB x workers on
+      # EVERY chunk; the chunk loop below instead zips each key's parcels and its
+      # owner name/address in as foreach ITERATION values, so a worker receives
+      # only the rows it will actually process.
       .old_max <- getOption('future.globals.maxSize')
       options(future.globals.maxSize = 2 * 1024^3)
       on.exit(options(future.globals.maxSize = .old_max), add = TRUE)
@@ -1745,105 +1829,205 @@ owner_scrape_actual = function(austin_parcel_data_merged
                 if (length(held)) paste0(' (holding ', length(held),
                                          ' no_record)') else '')
 
-        still_pending <- foreach(key_index = ask_now,
-                                 .combine = 'c',
-                                 .options.RNG = 8989,
-                                 .export = financial_marker_string) %dopar% {
-          # BOX-FIX: pending now carries each key's status in its names (see
-          # below), so an iterated element arrives named. Strip it here rather
-          # than trust that `[[` on a named integer stays positional.
-          key_index <- unname(key_index)
-          owner_name    <- owner_keys$owner_name[key_index]
-          owner_address <- owner_keys$owner_address[key_index]
+        # BOX-FIX: chunk the pass and recycle the worker pool between chunks.
+        #
+        # This was one foreach over the whole of `ask_now`, with the
+        # `multisession` pool established once before the pass loop and torn
+        # down only by on.exit when the target finished. That is what produced
+        # the monotonic ~6.5 GB/min growth quoted at SCRAPE_WORKERS -- 127.3 GiB
+        # of container RSS at 19 minutes with 23 GB of host memory left, killed
+        # by hand. Each persistent worker's RSS ratchets to its own high-water
+        # mark and R never gives it back, so 128 workers each grinding through
+        # ~750 owners in sequence multiplied one leak by 128 with nothing in the
+        # pass ever reclaiming any of it.
+        #
+        # Process death is the only reclaim mechanism R offers here, so: plan,
+        # run a bounded slice, plan(sequential) to stop every node, gc(), repeat.
+        # Verified in this container (future 1.70.0) that plan(sequential)
+        # genuinely stops the PSOCK nodes -- the worker process count and
+        # parallelly::freeConnections() both return to their pre-plan values, and
+        # the next plan() call yields fresh PIDs. That last part is the whole
+        # fix: if future merely re-used a cached pool, this would be a no-op.
+        #
+        # API behaviour is deliberately untouched. Chunking changes only WHICH
+        # process asks. Every key in `ask_now` is still asked exactly once per
+        # pass, in the same order, through the same insistently() backoff, and
+        # the tiered pass logic above still decides what is in `ask_now` at all.
+        chunk_starts <- seq(1L, length(ask_now), by = SCRAPE_CHUNK)
+        n_chunks <- length(chunk_starts)
+        # Filled with [<- and list(), NEVER [[<-: assigning NULL via [[<- would
+        # DELETE the element and shift every later chunk into the wrong slot. A
+        # chunk whose every key resolved legitimately returns NULL.
+        still_pending_parts <- vector('list', n_chunks)
 
-          # situs_* are pass-through labels for the lookup, so the first parcel's
-          # are fine; each parcel gets its own stamped copy in expand_to_parcels().
-          parcels <- parcel_groups[[key_index]]
-          answer <- tryCatch({
-            insist_scrape_owner(owner_name,
-                                situs_pID = parcels$situs_pID[1],
-                                situs_address = parcels$situs_address[1],
-                                veneer_owner = owner_name,
-                                veneer_owner_mail_address = owner_address)
-          }, error = function(cond){ cond })
+        for (chunk_i in seq_len(n_chunks)) {
+          chunk_lo <- chunk_starts[chunk_i]
+          chunk_hi <- min(chunk_lo + SCRAPE_CHUNK - 1L, length(ask_now))
+          # `[` keeps the names, and the names are load-bearing: they carry each
+          # key's matched / no_record / not_resolved label, which the tiered
+          # pass filter and the post-loop sweep both read back.
+          chunk_keys <- ask_now[chunk_lo:chunk_hi]
 
-          # BOX-FIX: NULL and an error condition are NOT the same outcome, and
-          # this branch used to collapse them. cpa_api_request() ends in
-          # httr2::req_perform(), which throws on any transport failure or
-          # non-2xx status, so every genuine failure -- including the rate-limit
-          # rejections the backoff above exists for -- arrives here as a
-          # condition object. A bare NULL can only come from one place:
-          # scrape_owner_api()'s name-search loop giving up after three
-          # SUCCESSFUL responses that each reported count == 0. That is the
-          # registry telling us nothing is filed under the name, which is a
-          # finding, not a failure.
+          # BOX-SPEED: ship the slice, not the whole world. Re-planning per
+          # chunk re-exports every detected global to every worker, and
+          # parcel_groups is a ~34 MiB list, so leaving the worker to index into
+          # it would cost 34 MiB x workers on every single chunk. Passing the
+          # parcels as a foreach ITERATION value instead means foreach hands each
+          # worker only the elements it will actually process.
           #
-          # The distinction rides back on the NAME of the returned index;
-          # `.combine = 'c'` preserves names, so the sweep below can read it.
-          # Control flow is deliberately unchanged -- a no_record key is still
-          # re-asked next pass, because the API owner's warning that a no-result
-          # is not durable applies to count == 0 as much as to a refusal. Only
-          # the label is new, and it is always the label from the LAST pass that
-          # asked, so an eventual answer overwrites an earlier no.
-          if ('error' %in% class(answer)) {
-            return(stats::setNames(key_index, 'not_resolved'))
-          }
-          if (is.null(answer)) {
-            return(stats::setNames(key_index, 'no_record'))
-          }
+          # And there is no index remap to get wrong, because the worker no
+          # longer indexes anything at all: parcels, owner_name and owner_address
+          # arrive already paired with their own key_index. These three vectors
+          # are built by the SAME global index in the same order, so element j of
+          # each is owner_keys row chunk_keys[j] by construction. key_index
+          # itself stays GLOBAL, so `pending`, the unresolved sweep and
+          # owner_scrape_unresolved.csv keep indexing owner_keys and
+          # parcel_groups exactly as they did before.
+          chunk_parcels     <- parcel_groups[unname(chunk_keys)]
+          chunk_owner_names <- owner_keys$owner_name[unname(chunk_keys)]
+          chunk_owner_addrs <- owner_keys$owner_address[unname(chunk_keys)]
+          stopifnot(length(chunk_parcels) == length(chunk_keys),
+                    length(chunk_owner_names) == length(chunk_keys),
+                    length(chunk_owner_addrs) == length(chunk_keys))
 
-          # BOX-FIX: everything from here down is width-sensitive, and it used to
-          # sit OUTSIDE the tryCatch above -- which only ever guarded the API
-          # call. `colnames(answer) <- colnames_scraped` errors outright when
-          # ncol(answer) != 16 ("'names' attribute [16] must be the same length
-          # as the vector [7]"), and an error raised in a %dopar% body that no
-          # handler catches propagates out of foreach and terminates the ENTIRE
-          # loop. One malformed owner would therefore abandon all ~95.8k
-          # lookups. That is the wrong blast radius no matter what causes the
-          # malformed answer -- the argument bug fixed above in scrape_owner_api()
-          # is one cause, but any future shape drift in the recursive rbind paths
-          # would do the same -- so the guard belongs here regardless.
-          #
-          # The width is now checked explicitly and loudly rather than being
-          # discovered by an assignment failing. Under doFuture/future the
-          # worker's message() conditions are relayed to the main session when
-          # the future is collected, so this lands in the run log with the owner
-          # name attached instead of vanishing in a worker.
-          #
-          # The downgrade is to `not_resolved`, never `no_record`: no_record is a
-          # positive finding ("Texas has nothing filed under this name") and must
-          # not be allowed to absorb our own processing failures. The key is
-          # returned still-pending, exactly as an API error would be, so the
-          # two-pass retry semantics are untouched -- it is re-asked next pass and
-          # takes the label of the last pass that asked. No extra API calls
-          # happen: this runs strictly after the single lookup has returned.
-          write_failure <- tryCatch({
-            if (ncol(answer) != length(colnames_scraped)) {
-              stop(sprintf(
-                'answer for owner "%s" has %d columns, expected %d -- refusing to label it; downgrading this owner to not_resolved. columns seen: %s',
-                owner_name,
-                ncol(answer),
-                length(colnames_scraped),
-                paste(colnames(answer), collapse = ', ')))
+          message('[owner_scrape] pass ', pass, ' chunk ', chunk_i, '/',
+                  n_chunks, ': ', length(chunk_keys), ' owners to look up, ',
+                  scrape_workers_used, ' fresh workers (RSS ',
+                  container_rss_gb(), ' GiB before pool)')
+
+          future::plan(future::multisession, workers = scrape_workers_used)
+
+          chunk_result <- foreach(key_index = chunk_keys,
+                                  owner_name = chunk_owner_names,
+                                  owner_address = chunk_owner_addrs,
+                                  parcels = chunk_parcels,
+                                  .combine = 'c',
+                                  .options.RNG = 8989,
+                                  .export = financial_marker_string) %dopar% {
+            # BOX-FIX: pending carries each key's status in its names, so an
+            # iterated element arrives named. Strip it here rather than trust
+            # that `[[` on a named integer stays positional.
+            #
+            # owner_name, owner_address and parcels used to be looked up here out
+            # of the exported owner_keys / parcel_groups. They are now zipped in
+            # as iteration values (see above), which is both cheaper per chunk
+            # and impossible to misalign. situs_* are still pass-through labels
+            # for the lookup, so the first parcel's are fine; every parcel gets
+            # its own stamped copy in expand_to_parcels().
+            key_index <- unname(key_index)
+            answer <- tryCatch({
+              insist_scrape_owner(owner_name,
+                                  situs_pID = parcels$situs_pID[1],
+                                  situs_address = parcels$situs_address[1],
+                                  veneer_owner = owner_name,
+                                  veneer_owner_mail_address = owner_address)
+            }, error = function(cond){ cond })
+
+            # BOX-FIX: NULL and an error condition are NOT the same outcome, and
+            # this branch used to collapse them. cpa_api_request() ends in
+            # httr2::req_perform(), which throws on any transport failure or
+            # non-2xx status, so every genuine failure -- including the rate-limit
+            # rejections the backoff above exists for -- arrives here as a
+            # condition object. A bare NULL can only come from one place:
+            # scrape_owner_api()'s name-search loop giving up after three
+            # SUCCESSFUL responses that each reported count == 0. That is the
+            # registry telling us nothing is filed under the name, which is a
+            # finding, not a failure.
+            #
+            # The distinction rides back on the NAME of the returned index;
+            # `.combine = 'c'` preserves names, so the sweep below can read it.
+            # Control flow is deliberately unchanged -- a no_record key is still
+            # re-asked next pass, because the API owner's warning that a no-result
+            # is not durable applies to count == 0 as much as to a refusal. Only
+            # the label is new, and it is always the label from the LAST pass that
+            # asked, so an eventual answer overwrites an earlier no.
+            if ('error' %in% class(answer)) {
+              return(stats::setNames(key_index, 'not_resolved'))
             }
-            colnames(answer) <- colnames_scraped
-            answer$scrape_status <- 'matched'
-            # Reorder to the canonical schema so every part file appends with an
-            # identical header; fwrite(append = TRUE) does not reconcile columns.
-            answer <- answer[, colnames_used, drop = FALSE]
-            .pf <- sprintf('owner_data_part_%d.csv', Sys.getpid())
-            data.table::fwrite(expand_to_parcels(answer, parcels),
-                               .pf,
-                               append = file.exists(.pf),
-                               sep = ',')
-            NULL
-          }, error = function(cond){ cond })
+            if (is.null(answer)) {
+              return(stats::setNames(key_index, 'no_record'))
+            }
 
-          if (!is.null(write_failure)) {
-            message('[owner_scrape] ', conditionMessage(write_failure))
-            return(stats::setNames(key_index, 'not_resolved'))
+            # BOX-FIX: everything from here down is width-sensitive, and it used to
+            # sit OUTSIDE the tryCatch above -- which only ever guarded the API
+            # call. `colnames(answer) <- colnames_scraped` errors outright when
+            # ncol(answer) != 16 ("'names' attribute [16] must be the same length
+            # as the vector [7]"), and an error raised in a %dopar% body that no
+            # handler catches propagates out of foreach and terminates the ENTIRE
+            # loop. One malformed owner would therefore abandon all ~95.8k
+            # lookups. That is the wrong blast radius no matter what causes the
+            # malformed answer -- the argument bug fixed above in scrape_owner_api()
+            # is one cause, but any future shape drift in the recursive rbind paths
+            # would do the same -- so the guard belongs here regardless.
+            #
+            # The width is now checked explicitly and loudly rather than being
+            # discovered by an assignment failing. Under doFuture/future the
+            # worker's message() conditions are relayed to the main session when
+            # the future is collected, so this lands in the run log with the owner
+            # name attached instead of vanishing in a worker.
+            #
+            # The downgrade is to `not_resolved`, never `no_record`: no_record is a
+            # positive finding ("Texas has nothing filed under this name") and must
+            # not be allowed to absorb our own processing failures. The key is
+            # returned still-pending, exactly as an API error would be, so the
+            # two-pass retry semantics are untouched -- it is re-asked next pass and
+            # takes the label of the last pass that asked. No extra API calls
+            # happen: this runs strictly after the single lookup has returned.
+            write_failure <- tryCatch({
+              if (ncol(answer) != length(colnames_scraped)) {
+                stop(sprintf(
+                  'answer for owner "%s" has %d columns, expected %d -- refusing to label it; downgrading this owner to not_resolved. columns seen: %s',
+                  owner_name,
+                  ncol(answer),
+                  length(colnames_scraped),
+                  paste(colnames(answer), collapse = ', ')))
+              }
+              colnames(answer) <- colnames_scraped
+              answer$scrape_status <- 'matched'
+              # Reorder to the canonical schema so every part file appends with an
+              # identical header; fwrite(append = TRUE) does not reconcile columns.
+              answer <- answer[, colnames_used, drop = FALSE]
+              .pf <- sprintf('owner_data_part_%d.csv', Sys.getpid())
+              data.table::fwrite(expand_to_parcels(answer, parcels),
+                                 .pf,
+                                 append = file.exists(.pf),
+                                 sep = ',')
+              NULL
+            }, error = function(cond){ cond })
+
+            if (!is.null(write_failure)) {
+              message('[owner_scrape] ', conditionMessage(write_failure))
+              return(stats::setNames(key_index, 'not_resolved'))
+            }
+            return(NULL)
           }
-          return(NULL)
+
+          # Destroy every worker process. THIS is the reclaim -- gc() inside a
+          # living worker would free R objects without returning the pages, which
+          # is exactly why the unchunked version grew without bound.
+          future::plan(future::sequential)
+          gc()
+
+          still_pending_parts[chunk_i] <- list(chunk_result)
+          message('[owner_scrape] pass ', pass, ' chunk ', chunk_i, '/',
+                  n_chunks, ': resolved ',
+                  length(chunk_keys) - length(chunk_result),
+                  ', still pending ', length(chunk_result),
+                  ' (RSS ', container_rss_gb(), ' GiB after teardown)')
+        }
+
+        # Recombine to exactly what the single unchunked foreach produced.
+        # unlist() over an UNNAMED list of named integer vectors concatenates the
+        # inner names unprefixed and in order, so this is name-for-name and
+        # order-for-order what `.combine = 'c'` over all of ask_now would have
+        # returned. NULL chunks contribute nothing, as they should.
+        still_pending <- unlist(still_pending_parts, use.names = TRUE)
+        # unlist() of an all-NULL list returns NULL and of an empty list returns
+        # list(); c(held, list()) would silently turn `pending` into a LIST and
+        # corrupt every downstream index. ask_now[0] is a zero-length integer
+        # with the right names attribute, which c() absorbs harmlessly.
+        if (!length(still_pending)) {
+          still_pending <- ask_now[0]
         }
 
         resolved_this_pass <- length(ask_now) - length(still_pending)
