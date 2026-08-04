@@ -10,11 +10,20 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-# /health returns 200 in ~1.4 ms and touches the database, so it fails when the
-# volume is unseeded or the file is unreadable -- which is exactly the condition
-# a healthcheck should catch.
-healthcheckPath = "/health"
-healthcheckTimeout = 30
+# NO healthcheckPath on purpose, and this is the one setting worth explaining.
+#
+# /health is a good healthcheck -- 200 in ~1.4 ms, and it touches the database so
+# it genuinely fails when the volume is unreadable. But it cannot be enabled on
+# the FIRST deploy: the volume starts empty, entrypoint.sh sits in its wait loop
+# until the database is streamed in, and a healthcheck would fail the deployment
+# before there is a running container to `railway ssh` into. That is the same
+# deadlock the wait loop exists to break, reintroduced one layer up.
+#
+# Once the volume is seeded and the service is serving, add:
+#     healthcheckPath = "/health"
+#     healthcheckTimeout = 30
+# From then on the volume is persistent, so restarts find the database in place
+# and the healthcheck is only ever reporting real failures.
 
 # The server holds no request state between requests and the database is opened
 # read-only, so a restart is always safe. ON_FAILURE rather than ALWAYS so a

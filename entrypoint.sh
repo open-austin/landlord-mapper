@@ -38,14 +38,32 @@ if [ ! -f "$DB" ]; then
   done
 fi
 
-# Fail loudly and immediately rather than letting the server start and 500 every
-# request. A missing database here means the volume was never seeded, which is an
-# operator action, so say exactly what to run.
+# Wait rather than exit when the volume is empty.
+#
+# Exiting here looks like the responsible choice and is actually a deadlock: the
+# only way to get the database onto the volume is `railway ssh`, and that needs a
+# RUNNING container. An entrypoint that dies on first boot can never be seeded,
+# so the service crash-loops until the retry limit and there is no way in.
+#
+# Waiting breaks the cycle and makes seeding self-completing: deploy, stream the
+# database in, and this loop picks it up and starts serving without a restart.
 if [ ! -f "$DB" ]; then
-  echo "FATAL: no database at $DB" >&2
-  echo "The volume is empty. Seed it once from the machine holding the built" >&2
-  echo "database:  ./seed-volume.sh /path/to/lm.sqlite3" >&2
-  exit 1
+  echo "no database at $DB yet -- the volume is unseeded."
+  echo "waiting. seed it from the machine holding the built database:"
+  echo "    ./seed-volume.sh /path/to/lm.sqlite3"
+  waited=0
+  while [ ! -f "$DB" ]; do
+    sleep 15
+    waited=$((waited + 15))
+    # Only mention it every 5 minutes; a line every 15 s would bury the log.
+    if [ $((waited % 300)) -eq 0 ]; then
+      echo "still waiting for $DB (${waited}s)"
+    fi
+  done
+  # seed-volume.sh renames into place, so the file appearing means it is
+  # complete. Guard the streamed-in case anyway, since a future seeding route
+  # might not be atomic.
+  sleep 2
 fi
 
 echo "starting server: LM_PORT=$LM_PORT LM_DB=$DB ($(wc -c < "$DB") bytes)"
