@@ -1284,8 +1284,43 @@ scrape_owner_api = function(owner_name,
                                owner_address = owner_mail_address,
                                owner_active_year = owner_active_year)
       
+      # BOX-FIX: this branch used to pass `business_details_table` -- the
+      # function's own NA-valued default argument -- where it meant to pass
+      # `business_details_table_parse`, the franchise record this very call just
+      # fetched. That is an UPSTREAM bug, not one introduced by the box patches;
+      # it is present in scrape_owner_api() as written, and the legacy
+      # Selenium-era scrape_owner() below correctly uses the _parse table in BOTH
+      # the depth > 0 and depth == 0 arms of this same if/else, which is what
+      # marks this as a porting typo rather than intent.
+      #
+      # Why it fires at the top level at all: the comment above says "no results
+      # on a recursive owner search", implying depth > 0 only happens under
+      # recursion (where the caller does pass its parsed table down, so the bug
+      # is invisible). But owner_scrape_actual()'s worker calls this with the
+      # default depth = 3, so EVERY top-level owner whose franchise record exists
+      # but lists zero officers lands here with business_details_table == NA.
+      #
+      # What that produced, measured: officer_business_bind() cbinds a 4-column
+      # owner_table to the scalar NA, giving 5 columns, and situs_pID /
+      # situs_address bring it to 7 -- against the 16 the schema expects. Those 7
+      # columns do not include corp_registered_agent_add, so the address_clean()
+      # calls at the end of this function hit `data[, col]` on a missing column
+      # and throw "undefined columns selected". The throw is inside the worker's
+      # tryCatch, so it did not kill the run, but it did mean: the owner was
+      # retried five times by purrr::insistently with backoff, then re-asked on
+      # the next pass, and finally recorded as `not_resolved` -- i.e. "the API
+      # never answered us" -- when in fact Texas answered clearly and the answer
+      # was a real franchise filing with no officers listed. Wasted API calls,
+      # and a genuine finding misfiled as an unknown, which is exactly the
+      # matched / no_record / not_resolved distinction the previous commit exists
+      # to protect.
+      #
+      # Fixing the argument makes this branch return the same 16 columns as its
+      # depth == 0 sibling: the entity's own franchise record with an empty
+      # officer row. It also removes those wasted retries, which is a reduction
+      # in API traffic for the affected owners, not a change to the retry policy.
       results = officer_business_bind(owner_table,
-                                      business_details_table)
+                                      business_details_table_parse)
       results$situs_pID <- situs_pID
       results$situs_address <- situs_address
     }
@@ -1703,16 +1738,57 @@ owner_scrape_actual = function(austin_parcel_data_merged
             return(stats::setNames(key_index, 'no_record'))
           }
 
-          colnames(answer) <- colnames_scraped
-          answer$scrape_status <- 'matched'
-          # Reorder to the canonical schema so every part file appends with an
-          # identical header; fwrite(append = TRUE) does not reconcile columns.
-          answer <- answer[, colnames_used, drop = FALSE]
-          .pf <- sprintf('owner_data_part_%d.csv', Sys.getpid())
-          data.table::fwrite(expand_to_parcels(answer, parcels),
-                             .pf,
-                             append = file.exists(.pf),
-                             sep = ',')
+          # BOX-FIX: everything from here down is width-sensitive, and it used to
+          # sit OUTSIDE the tryCatch above -- which only ever guarded the API
+          # call. `colnames(answer) <- colnames_scraped` errors outright when
+          # ncol(answer) != 16 ("'names' attribute [16] must be the same length
+          # as the vector [7]"), and an error raised in a %dopar% body that no
+          # handler catches propagates out of foreach and terminates the ENTIRE
+          # loop. One malformed owner would therefore abandon all ~95.8k
+          # lookups. That is the wrong blast radius no matter what causes the
+          # malformed answer -- the argument bug fixed above in scrape_owner_api()
+          # is one cause, but any future shape drift in the recursive rbind paths
+          # would do the same -- so the guard belongs here regardless.
+          #
+          # The width is now checked explicitly and loudly rather than being
+          # discovered by an assignment failing. Under doFuture/future the
+          # worker's message() conditions are relayed to the main session when
+          # the future is collected, so this lands in the run log with the owner
+          # name attached instead of vanishing in a worker.
+          #
+          # The downgrade is to `not_resolved`, never `no_record`: no_record is a
+          # positive finding ("Texas has nothing filed under this name") and must
+          # not be allowed to absorb our own processing failures. The key is
+          # returned still-pending, exactly as an API error would be, so the
+          # two-pass retry semantics are untouched -- it is re-asked next pass and
+          # takes the label of the last pass that asked. No extra API calls
+          # happen: this runs strictly after the single lookup has returned.
+          write_failure <- tryCatch({
+            if (ncol(answer) != length(colnames_scraped)) {
+              stop(sprintf(
+                'answer for owner "%s" has %d columns, expected %d -- refusing to label it; downgrading this owner to not_resolved. columns seen: %s',
+                owner_name,
+                ncol(answer),
+                length(colnames_scraped),
+                paste(colnames(answer), collapse = ', ')))
+            }
+            colnames(answer) <- colnames_scraped
+            answer$scrape_status <- 'matched'
+            # Reorder to the canonical schema so every part file appends with an
+            # identical header; fwrite(append = TRUE) does not reconcile columns.
+            answer <- answer[, colnames_used, drop = FALSE]
+            .pf <- sprintf('owner_data_part_%d.csv', Sys.getpid())
+            data.table::fwrite(expand_to_parcels(answer, parcels),
+                               .pf,
+                               append = file.exists(.pf),
+                               sep = ',')
+            NULL
+          }, error = function(cond){ cond })
+
+          if (!is.null(write_failure)) {
+            message('[owner_scrape] ', conditionMessage(write_failure))
+            return(stats::setNames(key_index, 'not_resolved'))
+          }
           return(NULL)
         }
 
