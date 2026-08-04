@@ -607,6 +607,39 @@ situs_owner_string_dist_matrix = function(situs_owner_strings,
 #   Rfast::cova(q3_dist_matrix, large = TRUE)
 # }
 
+# BOX-FIX: bound the fan-out in the final-output stage.
+#
+# Four call sites here sized their worker pool from the machine:
+# multidplyr::new_cluster(parallel::detectCores()) in situs_neighor_gen_clean and
+# situs_neighor_gen, and a bare plan(multisession, maxSizeOfObjects = 4e9) in
+# situs_neighor_gen and parcel_geolocate. On this box that is 128 workers, and
+# each one is a full R process that ends up holding its own copy of the
+# 2,133,448 x 35 owner frame.
+#
+# Measured on the box: austin_parcel_data_merged_owner_clean was run with the
+# call site untouched and killed deliberately at 60.6 GiB. ps inside the
+# container showed 130 R processes -- the main session, one crew worker at
+# 4.35 GiB, and 128 multidplyr session workers at 1.40 GiB each and still
+# climbing, on track for roughly 180 GiB against 188 GiB of RAM. The run before
+# that one was allowed to continue and died at 118.8 GiB against a 120 GiB
+# container cap, surfacing as "error writing to connection" -- a worker being
+# killed mid-write, not a serialisation bug. serialize(owner_data_used) is
+# 1014 MB, which is exactly the size of the 77 callr-fun-* spill files the first
+# attempt left in the container tempdir, so the deaths appear to have triggered a
+# relaunch storm that re-serialised the frame once per retry and filled the root
+# filesystem as a second-order effect.
+#
+# 24 is the same bound, chosen the same way, as DIST_MATRIX_WORKERS was in
+# 6f426d6 and SCRAPE_WORKERS in scrape_helper_functions.R: headroom rather than
+# throughput. 24 x 1.6 GiB is about 38 GiB of worker baseline, which leaves the
+# main session, the crew worker and the 1.4 GiB mori shared region room to fit.
+# Raise it only against a fresh measurement.
+#
+# Deliberately NOT applied to the new_cluster(parallel::detectCores()) in
+# situs_owner_string_gen above: that target has already completed at 128 workers,
+# it is cached, and touching the function would invalidate it for no reason.
+FINAL_OUTPUT_WORKERS <- 24L
+
 situs_neighor_gen_clean = function(owner_data_used){
   
   # owner_data_used <- head(owner_data_used,
@@ -636,7 +669,7 @@ situs_neighor_gen_clean = function(owner_data_used){
   # }
   print(Sys.time())
   # else{
-  cl <- multidplyr::new_cluster(parallel::detectCores())
+  cl <- multidplyr::new_cluster(FINAL_OUTPUT_WORKERS)
   owner_data_used$legallocationdesc <- NULL
   
   
@@ -712,7 +745,7 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
   print(Sys.time())
   # readr::write_rds(owner_data_used,'owner_data_used_proc.rds')
   
-  cl <- multidplyr::new_cluster(parallel::detectCores())
+  cl <- multidplyr::new_cluster(FINAL_OUTPUT_WORKERS)
   
   multidplyr::cluster_assign(cl,
                              pIDs_used = pIDs_used,
@@ -1020,6 +1053,7 @@ situs_neighor_gen_final = function(owner_data_used,
   options(future.globals.maxSize = 4e9)
   registerDoFuture()
   plan(multisession,
+       workers = FINAL_OUTPUT_WORKERS,
        maxSizeOfObjects = 4e9)
   # )
   print(Sys.time())
@@ -1143,6 +1177,7 @@ parcel_geolocate = function(owner_data){
   options(future.globals.maxSize = 4e9)
   registerDoFuture()
   plan(multisession,
+       workers = FINAL_OUTPUT_WORKERS,
        maxSizeOfObjects = 4e9
        )
   owners_info_scraped_coords <- foreach(index = 1:length(inds_used$start),
