@@ -1530,7 +1530,14 @@ colnames_scraped <- setdiff(colnames_used, 'scrape_status')
 # confirmed the key has no cost ceiling for this volume, so the only limit left is
 # the API's rate ceiling. This is network-bound HTTP, so it can exceed core count
 # freely.
-SCRAPE_WORKERS <- 48
+SCRAPE_WORKERS <- 128
+# BOX-SPEED: raised from 48. 48 was the right number only while a throttled
+# request was indistinguishable from "no such entity" -- both wrote an all-NA
+# row -- so pushing the API risked silently inventing false negatives. Now that
+# a non-answer is recorded as `not_resolved` and re-asked, over-driving the API
+# costs time and shows up in the status counts rather than corrupting the
+# output. So find the ceiling empirically: if not_resolved comes back large,
+# turn this down. Network-bound HTTP on a 128-core / 188 GB host.
 
 # BOX-SPEED: how many times to ask about an owner that did not resolve. The CPA API
 # is finicky (owner's words): the same property can return a response or no response
@@ -1538,7 +1545,13 @@ SCRAPE_WORKERS <- 48
 # cached. Two passes, because ~41% of owners genuinely have no franchise record and
 # each extra pass re-asks ~39k questions that will keep answering "no" -- a third
 # pass would cost more lookups than skipping the dedup entirely.
-SCRAPE_RETRY_PASSES <- 2
+SCRAPE_RETRY_PASSES <- 4
+# BOX-SPEED: raised from 2, which is only affordable because passes 3+ re-ask
+# ONLY the keys the API never answered (see the pass loop). Every pass used to
+# re-ask everything still pending, including the ~39k owners that genuinely
+# have no filing, so a third pass cost ~39k lookups to recover almost nothing.
+# Passes 1 and 2 still ask everything, which keeps the repo owner's point that
+# even a count==0 answer can be transient.
 
 # BOX-FIX: top level ON PURPOSE. This used to be defined inside
 # owner_scrape_actual(), where its enclosing environment was that call frame --
@@ -1688,10 +1701,28 @@ owner_scrape_actual = function(austin_parcel_data_merged
       for (pass in seq_len(SCRAPE_RETRY_PASSES)) {
         if (!length(pending)) break
         passes_used <- pass
-        message('[owner_scrape] pass ', pass, '/', SCRAPE_RETRY_PASSES,
-                ': ', length(pending), ' owners to look up')
 
-        still_pending <- foreach(key_index = pending,
+        # BOX-SPEED: from pass 3 on, only re-ask keys the API never answered.
+        # `no_record` means the registry replied that nothing is filed under
+        # the name, three times, across three spellings. Passes 1 and 2 re-ask
+        # those anyway because the repo owner warned a no-response can be
+        # transient -- but re-asking ~39k genuine no_records on every further
+        # pass would cost far more than it recovers. `not_resolved` is the set
+        # worth hammering, and higher concurrency is what produces it.
+        held <- pending[0]
+        ask_now <- pending
+        if (pass >= 3) {
+          held    <- pending[names(pending) == 'no_record']
+          ask_now <- pending[names(pending) != 'no_record']
+        }
+        if (!length(ask_now)) break
+
+        message('[owner_scrape] pass ', pass, '/', SCRAPE_RETRY_PASSES,
+                ': ', length(ask_now), ' owners to look up',
+                if (length(held)) paste0(' (holding ', length(held),
+                                         ' no_record)') else '')
+
+        still_pending <- foreach(key_index = ask_now,
                                  .combine = 'c',
                                  .options.RNG = 8989,
                                  .export = financial_marker_string) %dopar% {
@@ -1792,10 +1823,12 @@ owner_scrape_actual = function(austin_parcel_data_merged
           return(NULL)
         }
 
-        resolved_this_pass <- length(pending) - length(still_pending)
+        resolved_this_pass <- length(ask_now) - length(still_pending)
         message('[owner_scrape] pass ', pass, ': resolved ', resolved_this_pass,
                 ', still pending ', length(still_pending))
-        pending <- still_pending
+        # Keys held back this pass keep their existing label and stay pending,
+        # so the sweep still records them and the counts stay complete.
+        pending <- c(held, still_pending)
       }
 
       # Whatever never resolved is recorded as empty, same as the original
