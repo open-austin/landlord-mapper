@@ -1762,7 +1762,12 @@ SCRAPE_CHUNK <- 10000
 # cached. Two passes, because ~41% of owners genuinely have no franchise record and
 # each extra pass re-asks ~39k questions that will keep answering "no" -- a third
 # pass would cost more lookups than skipping the dedup entirely.
-SCRAPE_RETRY_PASSES <- 4
+SCRAPE_RETRY_PASSES <- 3
+# BOX-SPEED: was 4, alongside moving the tier boundary to pass 2 (below). First
+# run to actually reach pass 2 measured it: pass 1 resolved 31,997 of 89,185,
+# then pass 2 re-asked 20,000 of the pending set across two chunks and recovered
+# EXACTLY ZERO. Re-asking a no_record owner returns no_record. So the extra pass
+# had nothing left to earn once no_record stops being re-interrogated.
 # BOX-SPEED: raised from 2, which is only affordable because passes 3+ re-ask
 # ONLY the keys the API never answered (see the pass loop). Every pass used to
 # re-ask everything still pending, including the ~39k owners that genuinely
@@ -2033,7 +2038,16 @@ owner_scrape_actual = function(austin_parcel_data_merged
         # worth hammering, and higher concurrency is what produces it.
         held <- pending[0]
         ask_now <- pending
-        if (pass >= 3) {
+        # BOX-SPEED: tier from pass 2, was pass 3. The original boundary gave
+        # no_record owners one free re-ask on the theory that even a count==0
+        # answer might be transient (the repo owner's warning that the API
+        # "can be finicky, so sometimes the same property can get a response or
+        # no response"). Measured on the first run to reach pass 2: 20,000
+        # re-asks across two chunks recovered ZERO owners. That re-ask costs
+        # ~57k lookups and about an hour, so it is now dropped. not_resolved --
+        # where the API never gave a usable answer -- is still re-asked by every
+        # later pass, minutes apart, because that is the set a retry can help.
+        if (pass >= 2) {
           held    <- pending[names(pending) == 'no_record']
           ask_now <- pending[names(pending) != 'no_record']
         }
