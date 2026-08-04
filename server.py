@@ -62,7 +62,6 @@ import html
 import io
 import json
 import os
-import queue
 import sqlite3
 import socketserver
 import sys
@@ -78,14 +77,6 @@ PORT = int(os.environ.get("LM_PORT", "8099"))
 
 PAGE_SIZE = 40
 MAX_HITS = 400
-
-# How many database sessions exist, ever. Each one costs an 8 MB SQLite page
-# cache, so this is the knob that turns memory from unbounded into a ceiling:
-# 8 sessions is ~64 MB of page cache total. Requests past this many CONCURRENT
-# TCP connections wait for a session rather than opening another one, which is
-# the intended behaviour -- this service measures 0.0013 vCPU average, so it is
-# nowhere near needing 8 concurrent readers.
-POOL_SIZE = int(os.environ.get("LM_POOL_SIZE", "8"))
 
 # Filtered-browse guards.
 #   RANK_LIMIT how deep the ranked owner tables go. Past this, use the export.
@@ -426,97 +417,29 @@ FILING_COLS = (
 FILING_SQL = ", ".join(FILING_COLS)
 
 
-class Session:
-    """One read-only connection plus the memo caches that belong with it.
-
-    Those caches were thread-local before, which sounds equivalent and is not.
-    ThreadingMixIn runs every TCP connection on a brand-new thread, so a
-    thread-local cache dies when that connection closes -- and a client that does
-    not reuse connections throws away the whole cache after a single request.
-    Binding them to a pooled session means they survive as long as the process,
-    which is what the surrounding docstrings always claimed.
-    """
-
-    __slots__ = ("c", "parcels", "owners", "filings")
-
-    def __init__(self, path):
-        self.c = sqlite3.connect("file:%s?mode=ro" % urllib.parse.quote(path),
-                                 uri=True, timeout=15)
-        self.c.execute("PRAGMA query_only = 1")
-        self.c.execute("PRAGMA cache_size = -8000")   # 8 MB of pages, now reused
-        # Bounded by their owners (ParcelRows.warm clears past 4000, the two
-        # tables past 3000). That bounding matters more now than it did when a
-        # cache lived one connection, because these persist for the process.
-        self.parcels = {}
-        self.owners = {}
-        self.filings = {}
-
-
 class Conn:
-    """A bounded pool of read-only connections, leased one per server thread.
+    """One read-only connection per thread.
 
-    Read-only is enforced by the open mode and by PRAGMA query_only, not by
-    convention: the process has no business writing this file, and the file
-    deliberately does not live in the root-owned CSV drop. A sqlite3 connection
-    must not be shared across threads, which is why this is a pool with one
-    session checked out per thread rather than a single shared connection.
-
-    The pool exists for memory, not speed. Opening a connection is cheap, but each
-    one allocates an 8 MB page cache, and allocating that per TCP connection meant
-    paying and discarding it continuously. Measured on Railway: ~4.4 MB of heap
-    growth per request, linear past 440 MB with no plateau, and none of it
-    returned to the OS. Capping glibc arenas did not help, because the churn
-    itself was the problem rather than where it landed.
+    This server is threaded and a sqlite3 connection must not be shared across
+    threads, so each thread opens its own and keeps it. Read-only is enforced by
+    the open mode and by PRAGMA query_only, not by convention: the process has no
+    business writing this file, and the file deliberately does not live in the
+    root-owned CSV drop.
     """
 
     def __init__(self, path):
         self.path = path
         self.local = threading.local()
-        self.free = queue.LifoQueue()
-        self.made = 0
-        self.made_lock = threading.Lock()
-
-    def session(self):
-        """The session leased to this thread, taking one on first use.
-
-        Leasing lazily here rather than at the request boundary keeps every caller
-        unchanged, and covers the startup queries that run on the main thread
-        before any request thread exists.
-        """
-        s = getattr(self.local, "s", None)
-        if s is not None:
-            return s
-        try:
-            s = self.free.get_nowait()
-        except queue.Empty:
-            with self.made_lock:
-                room = self.made < POOL_SIZE
-                if room:
-                    self.made += 1
-            if room:
-                # Opened outside the lock: connecting touches the filesystem and
-                # there is no reason to serialise other threads behind it.
-                s = Session(self.path)
-            else:
-                # At the ceiling, so wait for a thread to hand one back instead of
-                # opening an unbounded number. Blocking here IS the memory bound.
-                s = self.free.get()
-        self.local.s = s
-        return s
-
-    def release(self):
-        """Hand this thread's session back. Called from
-        Server.process_request_thread, the only place that knows a thread is done
-        with it -- keep-alive means one thread can serve many requests, so this
-        cannot be done per request."""
-        s = getattr(self.local, "s", None)
-        if s is None:
-            return
-        self.local.s = None
-        self.free.put(s)
 
     def conn(self):
-        return self.session().c
+        c = getattr(self.local, "c", None)
+        if c is None:
+            c = sqlite3.connect("file:%s?mode=ro" % urllib.parse.quote(self.path),
+                                uri=True, timeout=15)
+            c.execute("PRAGMA query_only = 1")
+            c.execute("PRAGMA cache_size = -8000")   # 8 MB of pages per thread
+            self.local.c = c
+        return c
 
     def all(self, sql, args=()):
         return self.conn().execute(sql, args).fetchall()
@@ -544,9 +467,13 @@ class ParcelRows:
 
     def __init__(self, db):
         self.db = db
+        self.local = threading.local()
 
     def cache(self):
-        return self.db.session().parcels
+        c = getattr(self.local, "c", None)
+        if c is None:
+            c = self.local.c = {}
+        return c
 
     def warm(self, idxs):
         c = self.cache()
@@ -627,9 +554,13 @@ class OwnerTable:
 
     def __init__(self, db):
         self.db = db
+        self.local = threading.local()
 
     def memo(self):
-        return self.db.session().owners
+        m = getattr(self.local, "m", None)
+        if m is None:
+            m = self.local.m = {}
+        return m
 
     def warm(self, ids):
         m = self.memo()
@@ -686,9 +617,13 @@ class FilingTable:
 
     def __init__(self, db):
         self.db = db
+        self.local = threading.local()
 
     def memo(self):
-        return self.db.session().filings
+        m = getattr(self.local, "m", None)
+        if m is None:
+            m = self.local.m = {}
+        return m
 
     def row_to_dict(self, row, officers):
         d = dict(zip(FILING_COLS, row))
@@ -4172,22 +4107,6 @@ class Server(socketserver.ThreadingMixIn, socketserver.TCPServer):
     daemon_threads = True
     allow_reuse_address = True
     request_queue_size = 64
-
-    def process_request_thread(self, request, client_address):
-        """Return the thread's database session to the pool when the thread is
-        done, whatever it is done because of.
-
-        This is the release point because protocol_version is HTTP/1.1: one thread
-        serves every request on a keep-alive connection, so releasing per request
-        would hand a session back while it was still in use. The finally must be
-        unconditional -- a client that disconnects mid-response raises here, and
-        leaking a session on that path would silently shrink the pool to nothing
-        and eventually deadlock every request.
-        """
-        try:
-            super().process_request_thread(request, client_address)
-        finally:
-            STORE.db.release()
 
 
 def main():
