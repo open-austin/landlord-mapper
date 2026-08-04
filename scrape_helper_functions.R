@@ -1163,6 +1163,113 @@ cpa_api_request = function(base_string,
 }
 
 
+# BOX-SPEED: classify a failed lookup so the retry policy can stop treating
+# "your request was wrong" as "the server is busy".
+#
+# cpa_api_request() ends in httr2::req_perform(), which throws on any non-2xx
+# status as well as on transport failure, so by the time a condition reaches
+# the retry wrapper the two cases are indistinguishable unless we look. The
+# 360-owner probe saw 60 x HTTP 400 and 5 x HTTP 413 and zero 429/503/
+# Retry-After, and re-asking a 400 five times rescued none of the 39 affected
+# owners -- see the block at insist_scrape_owner.
+#
+# Returns exactly one of:
+#   "transient" - worth the full backoff: 408, 425, 429, any 5xx, or a curl
+#                 transport failure (no response at all).
+#   "permanent" - any other HTTP status the server actually returned. A 4xx is
+#                 a statement about our request, and we would resend the same
+#                 bytes, so more attempts cannot change the answer.
+#   "unknown"   - no status to read, and not a recognised transport failure:
+#                 an error raised in our own R parsing code. Deliberately NOT
+#                 called permanent, because a finicky response shape is one way
+#                 those arise, and the caller keeps retrying these.
+#
+# Never throws. A classifier that can error would turn one odd condition object
+# into a dead worker.
+cpa_error_is_transient <- function(cnd) {
+  status <- NA_integer_
+  s <- tryCatch(cnd$resp$status_code, error = function(e) NULL)
+  if (is.numeric(s) && length(s) == 1L && !is.na(s)) status <- as.integer(s)
+  if (is.na(status)) {
+    # httr2 also encodes the status in the condition class (httr2_http_400).
+    cl <- class(cnd)
+    hit <- cl[grepl('^httr2_http_[0-9]{3}$', cl)]
+    if (length(hit)) status <- as.integer(sub('^httr2_http_', '', hit[1]))
+  }
+  if (!is.na(status)) {
+    if (status >= 500L || status %in% c(408L, 425L, 429L)) return('transient')
+    return('permanent')
+  }
+  if (inherits(cnd, 'httr2_failure') || inherits(cnd, 'curl_error')) {
+    return('transient')
+  }
+  'unknown'
+}
+
+# BOX-SPEED: the retry policy for one owner lookup. See the long block at the
+# call site in owner_scrape_actual() for the measurements that motivate it.
+#
+# A factory, not a closure defined at the call site, so that the returned
+# function's enclosing environment is THIS frame -- three small closures --
+# rather than owner_scrape_actual()'s frame, which holds the ~128 MB parcel
+# frame that future would then ship to every worker on every chunk.
+#
+# Attempt budget, compared with the purrr:::insistently() call this replaces:
+#   transient failure : 1 + up to 5 = up to 6 attempts, 2-4-8-16 s backoff.
+#                       Strictly MORE retrying than before, never less, so a
+#                       real throttle is handled at least as well as it was.
+#   unknown failure   : 1 + up to 3 = up to 4 attempts, 1-2 s backoff. Still
+#                       re-asks, but ~3 s of sleep instead of ~30 s.
+#   permanent failure : 1 attempt. The condition is re-signalled unchanged, so
+#                       the worker still records the owner as not_resolved and
+#                       the pass loop still re-asks it next pass.
+make_insist_scrape_owner <- function() {
+  # Captured BY VALUE, both of them, so that the closure this returns carries
+  # everything it needs and a future worker never has to resolve either name.
+  # purrr:::insistently(scrape_owner_api, ...) captured the function by value
+  # too -- it becomes insistently's `f` -- so keeping that property means this
+  # rewrite adds no new export dependency for the %dopar% body to satisfy.
+  ask <- scrape_owner_api
+  classify <- cpa_error_is_transient
+
+  # VERBATIM the wrapper this replaces -- same function, same rate_backoff
+  # arguments -- reached only when the failure is classified transient.
+  slow_retry <- purrr:::insistently(scrape_owner_api,
+                                    rate =purrr::rate_backoff(pause_base = 2,
+                                                        pause_cap = 30,
+                                                        pause_min = 2,
+                                                        max_times = 5,
+                                                        jitter = TRUE
+                                    ))
+
+  cheap_retry <- purrr:::insistently(scrape_owner_api,
+                                     rate =purrr::rate_backoff(pause_base = 1,
+                                                         pause_cap = 4,
+                                                         pause_min = 1,
+                                                         max_times = 3,
+                                                         jitter = TRUE
+                                     ))
+
+  function(...) {
+    # The first attempt is identical to insistently()'s first attempt:
+    # rate_sleep() does not sleep at i = 0, so nothing is being skipped here.
+    first <- tryCatch(ask(...), error = function(cnd) cnd)
+    if (!inherits(first, 'error')) {
+      return(first)
+    }
+    kind <- classify(first)
+    if (identical(kind, 'transient')) {
+      return(slow_retry(...))
+    }
+    if (identical(kind, 'unknown')) {
+      return(cheap_retry(...))
+    }
+    # Permanent. Re-signal the ORIGINAL condition, unchanged, so the worker's
+    # `'error' %in% class(answer)` branch sees exactly what it saw before.
+    stop(first)
+  }
+}
+
 cpa_franchise_get = function(taxId,
                              api_key_used){
   franchise_info <- cpa_api_request("https://comptroller.texas.gov/data-search/franchise-tax/%s",
@@ -1247,16 +1354,56 @@ scrape_owner_api = function(owner_name,
   # print('initial')
   try_used = 1
 
+  # BOX-SPEED: skip a spelling attempt whose QUERY STRING is byte-identical to
+  # one already sent for this owner. Measured, not guessed.
+  #
+  # All three set_name() branches only rewrite whitespace/punctuation sitting
+  # immediately before a financial marker (LLC / LTD / ...). For a name where
+  # that regex does not fire, set_name() returns trimws(name) -- i.e. exactly
+  # the string we already asked about. Over all 94,954 real owner keys:
+  #
+  #   attempt 2 byte-identical to attempt 1  : 87,921 of 89,408 names (98.3%)
+  #   attempt 3 byte-identical to 1 or 2     : 21,900 of 89,408 names (24.5%)
+  #   distinct queries the 3 attempts produce: mean 1.78 of 3 per owner key
+  #   => 115,858 of 284,862 name searches (40.7%) are exact repeats
+  #
+  # And the repeats never pay off. Over 360 probed owners the winning spelling
+  # was attempt 1 for 101, attempt 3 for 48, and attempt 2 for ZERO of them --
+  # which is what you would expect when attempt 2 is usually the same question.
+  #
+  # So this does NOT reduce the number of attempts and does NOT drop attempt 3:
+  # attempt 3 is load-bearing (52% of successful matches came from it). The
+  # bound is still "three spellings, then NULL"; try_used still increments on
+  # every iteration, so the loop is still capped at 3 iterations and cannot
+  # spin. Only the duplicate HTTP request is dropped.
+  #
+  # Answer-preserving, with one judgement call stated plainly: re-sending an
+  # identical query did act as an accidental retry of the count == 0 case, and
+  # the API owner warns a no-result is not durable. That durability concern is
+  # already handled one level up and better: a key that comes back no_record is
+  # re-asked on the next pass (SCRAPE_RETRY_PASSES = 4), minutes later rather
+  # than milliseconds later. Asking the identical question twice in the same
+  # second was never the mechanism protecting us.
+  asked_names <- owner_name
+
   while(payers_response$count==0){
     # print(try_used)
     try_used = try_used+1
     if(try_used>3){
       return(NULL)
     }
+    next_name <- set_name(owner_name,
+                          try_used
+                          )
+    # length check first: if set_name() ever returns something other than a
+    # single string, fall through and ask exactly as this code always has,
+    # rather than letting `if (logical(0))` throw.
+    if(length(next_name)==1L && next_name %in% asked_names){
+      next
+    }
+    asked_names <- c(asked_names, next_name)
     payers_response <- cpa_api_request("https://comptroller.texas.gov/data-search/franchise-tax?name=%s",
-                                       set_name(owner_name,
-                                                try_used
-                                                ),
+                                       next_name,
                                        api_key)
     }
   try_used = 1
@@ -1688,17 +1835,61 @@ consolidate_owner_parts = function() {
 
 owner_scrape_actual = function(austin_parcel_data_merged
                               ){
-  # BOX-SPEED: backoff hardened for higher concurrency. At SCRAPE_WORKERS clients a
-  # rate-limit rejection is likely, and it surfaces as an exception -- which the
-  # pass loop below now treats as "ask again later" rather than as empty data.
-  # Was max_times = 2 with pause_cap = 5.
-  insist_scrape_owner = purrr:::insistently(scrape_owner_api,
-                                            rate =purrr::rate_backoff(pause_base = 2,
-                                                                pause_cap = 30,
-                                                                pause_min = 2,
-                                                                max_times = 5,
-                                                                jitter = TRUE
-                                            ))
+  # BOX-SPEED: stop paying 30 seconds of exponential backoff for an answer the
+  # API already gave us definitively. This is THE cost of the scrape.
+  #
+  # The previous entry here assumed the retries were absorbing rate-limit
+  # rejections at SCRAPE_WORKERS clients. Measured over 360 real owner lookups
+  # against the live registry, that assumption is simply false:
+  #
+  #   HTTP 429 seen              : 0
+  #   HTTP 503 seen              : 0
+  #   Retry-After header seen    : 0
+  #   non-200 responses          : 60 x HTTP 400, 5 x HTTP 413
+  #
+  # We are not being throttled. We are retrying HTTP 400 Bad Request -- which
+  # is deterministic, because the request is malformed, so asking again with a
+  # byte-identical request cannot produce a different answer. And it never did:
+  # of the 39 owners that errored across both probes, every single one burned
+  # all 5 attempts and still ended as an error. Retries rescued ZERO of them.
+  #
+  # What that costs, from the 200-owner sequential probe:
+  #
+  #   200 owners, 808.5 s total, mean 4.04 s/owner, MEDIAN 0.79 s/owner
+  #     81 matched   : mean 0.96 s
+  #    100 no_record : mean 0.78 s
+  #     19 error     : mean 34.33 s   <-- 652 s, i.e. 80.7% of all wall time
+  #   time split     : 29.1% HTTP, 70.9% NOT HTTP
+  #   non-HTTP time, owners that never retried : 0.005 s/owner (R work is free)
+  #   non-HTTP time, owners that retried       : 30.09 s/owner (pure Sys.sleep)
+  #
+  # So ~70% of this scrape is 64 workers sleeping, in lockstep 2-4-8-16 second
+  # steps, waiting to re-ask a question that was already answered "no". It is
+  # also the straggler generator: foreach hands each worker a static slice, so
+  # one worker that draws several 30-second owners holds up the whole chunk.
+  #
+  # The fix classifies the failure instead of blanket-retrying it. See
+  # make_insist_scrape_owner() / cpa_error_is_transient(): a genuinely transient
+  # failure (429, 408, 425, 5xx, transport error) still gets the ORIGINAL
+  # backoff, unchanged, so if Texas ever does start throttling us the old
+  # behaviour is what happens. A deterministic 4xx fails fast. An error we
+  # cannot classify -- one raised in our own parsing code rather than by the
+  # transport -- keeps retrying, but on a cheap 1-2 second ladder instead of a
+  # 2-4-8-16 one, because the API being finicky is exactly how those arise and
+  # we do not want to stop asking.
+  #
+  # Every path still ends in the same label: an owner that ultimately errors is
+  # returned as an error, which the worker records as `not_resolved` and the
+  # pass loop re-asks, exactly as before. Nothing about the matched / no_record
+  # / not_resolved distinction or the tiered passes moves.
+  #
+  # Built by a top-level factory rather than inline, on purpose. A plain
+  # `function(...)` defined here would close over owner_scrape_actual()'s
+  # frame, and future would then serialise austin_parcel_data_merged (~128 MB)
+  # to every worker on every chunk -- the accidental frame capture that crashed
+  # this run once already. The factory's frame holds three small closures and
+  # nothing else.
+  insist_scrape_owner = make_insist_scrape_owner()
   # BOX-FIX: recover any part files from a previous interrupted run before the
   # size check below decides between the resume and fresh-start branches.
   consolidate_owner_parts()
