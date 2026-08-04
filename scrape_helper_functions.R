@@ -2346,11 +2346,44 @@ owner_scrape_actual = function(austin_parcel_data_merged
   # print('2')
   # austin_parcel_data_merged <- austin_parcel_data_merged %>%
   #   mutate(situs_pID=as.integer(situs_pID))
+  # BOX-FIX: normalise the join key instead of letting the join fail on type.
+  # read.csv() type-converts the scrape file's zero-padded situs_pID
+  # ('000000032170') to <integer>, while austin_parcel_data_merged carries the
+  # padded value as <character>, so dplyr refuses the join outright. That is a
+  # PRE-EXISTING UPSTREAM BUG, not something the box work introduced: this line
+  # is unreachable until owner_data_total.csv actually exists, and upstream main
+  # has never completed a scrape, so nothing here has ever run before.
+  #
+  # Coerced with as.numeric() on both sides, which is exactly what the resume
+  # filter earlier in this same function already does to this same pair of
+  # columns. The final join simply never got the same treatment; using the same
+  # style keeps one normalisation rule in the file rather than two.
+  #
+  # Done on a scratch column rather than in place so the frame this function
+  # RETURNS keeps situs_pID in its original zero-padded <character> form.
+  # Downstream targets consume that column, and as.character() of a large
+  # double reintroduces scientific notation, so an in-place coercion here would
+  # be a silent key change for every consumer. The scrape side's own situs_pID
+  # is dropped: same identifier, different representation, parcel side wins.
+  #
+  # situs_address STAYS in the key, and must. The 13 county appraisal rolls
+  # number their parcels independently, so a situs_pID is not unique across the
+  # metroplex -- 466956 of 1172494 IDs appear in more than one roll. Measured on
+  # this data, joining on pID alone here emits 393873 parcel-side rows instead
+  # of 2133448 and grafts a wrong-county franchise filing onto 220487 of them.
+  # Both sides carry a byte-identical situs_address for every genuine match
+  # (151613 of 151615 scrape rows join on the pair; the 2 that do not are
+  # precisely this cross-county collision), so the address disambiguates for
+  # free -- no fuzzy matching, no loss of real matches.
+  austin_parcel_data_merged$situs_pID_join <- as.numeric(austin_parcel_data_merged$situs_pID)
+  target_owner_info$situs_pID_join <- as.numeric(target_owner_info$situs_pID)
+  target_owner_info$situs_pID <- NULL
   austin_parcel_data_merged <- dplyr::left_join(austin_parcel_data_merged,
                                                   target_owner_info,
-                                                  by = c('situs_pID',
+                                                  by = c('situs_pID_join',
                                                          'situs_address'
                                                          ))
+  austin_parcel_data_merged$situs_pID_join <- NULL
   
   austin_parcel_data_merged$owner_address_scraped <- address_clean(austin_parcel_data_merged,
                                                                             'owner_address_scraped')
