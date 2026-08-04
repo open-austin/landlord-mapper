@@ -1462,8 +1462,29 @@ colnames_used <- c('owner_name_scraped',
                    'corp_tx_sos_file_num',
                    'corp_registered_agent_name',
                    'corp_registered_agent_mail_add',
+                   # BOX-FIX: resolution status. The old 16-column schema could
+                   # not tell "Texas genuinely has no franchise filing under this
+                   # name" apart from "the registry never answered us". Both
+                   # landed as byte-identical all-NA rows, which makes the
+                   # headline "~41% of owners have no Texas registration"
+                   # unverifiable -- every transient API refusal was silently
+                   # counted as a real absence, so a UI built on it either
+                   # overclaims or looks broken. The information already existed
+                   # at runtime (the retry loop knows which keys resolved), it
+                   # was simply never written down.
+                   #
+                   # Deliberately placed BEFORE situs_* so those two stay last.
+                   'scrape_status',
                    'situs_pID',
                    'situs_address')
+
+# BOX-FIX: the columns the CPA answer itself fills, in the order
+# scrape_owner_api() returns them. scrape_status is derived by the pass loop
+# rather than scraped, so it is NOT part of that shape. Keeping the two vectors
+# separate is load-bearing: assigning the 17-name vector onto the 16-column
+# answer would not error, it would shift every corp_* label by one and corrupt
+# the table silently.
+colnames_scraped <- setdiff(colnames_used, 'scrape_status')
 
 
 
@@ -1624,8 +1645,14 @@ owner_scrape_actual = function(austin_parcel_data_merged
       # no-response from this API is not durable.
       pending <- seq_len(nrow(owner_keys))
 
+      # BOX-FIX: the sidecar has to report how many times we actually asked,
+      # which is not always SCRAPE_RETRY_PASSES -- this loop breaks early once
+      # nothing is pending, and "unknown after 1 pass" is a weaker claim than
+      # "unknown after 2".
+      passes_used <- 0L
       for (pass in seq_len(SCRAPE_RETRY_PASSES)) {
         if (!length(pending)) break
+        passes_used <- pass
         message('[owner_scrape] pass ', pass, '/', SCRAPE_RETRY_PASSES,
                 ': ', length(pending), ' owners to look up')
 
@@ -1633,6 +1660,10 @@ owner_scrape_actual = function(austin_parcel_data_merged
                                  .combine = 'c',
                                  .options.RNG = 8989,
                                  .export = financial_marker_string) %dopar% {
+          # BOX-FIX: pending now carries each key's status in its names (see
+          # below), so an iterated element arrives named. Strip it here rather
+          # than trust that `[[` on a named integer stays positional.
+          key_index <- unname(key_index)
           owner_name    <- owner_keys$owner_name[key_index]
           owner_address <- owner_keys$owner_address[key_index]
 
@@ -1647,11 +1678,36 @@ owner_scrape_actual = function(austin_parcel_data_merged
                                 veneer_owner_mail_address = owner_address)
           }, error = function(cond){ cond })
 
-          if (is.null(answer) || ('error' %in% class(answer))) {
-            return(key_index)   # write nothing; ask again next pass
+          # BOX-FIX: NULL and an error condition are NOT the same outcome, and
+          # this branch used to collapse them. cpa_api_request() ends in
+          # httr2::req_perform(), which throws on any transport failure or
+          # non-2xx status, so every genuine failure -- including the rate-limit
+          # rejections the backoff above exists for -- arrives here as a
+          # condition object. A bare NULL can only come from one place:
+          # scrape_owner_api()'s name-search loop giving up after three
+          # SUCCESSFUL responses that each reported count == 0. That is the
+          # registry telling us nothing is filed under the name, which is a
+          # finding, not a failure.
+          #
+          # The distinction rides back on the NAME of the returned index;
+          # `.combine = 'c'` preserves names, so the sweep below can read it.
+          # Control flow is deliberately unchanged -- a no_record key is still
+          # re-asked next pass, because the API owner's warning that a no-result
+          # is not durable applies to count == 0 as much as to a refusal. Only
+          # the label is new, and it is always the label from the LAST pass that
+          # asked, so an eventual answer overwrites an earlier no.
+          if ('error' %in% class(answer)) {
+            return(stats::setNames(key_index, 'not_resolved'))
+          }
+          if (is.null(answer)) {
+            return(stats::setNames(key_index, 'no_record'))
           }
 
-          colnames(answer) <- colnames_used
+          colnames(answer) <- colnames_scraped
+          answer$scrape_status <- 'matched'
+          # Reorder to the canonical schema so every part file appends with an
+          # identical header; fwrite(append = TRUE) does not reconcile columns.
+          answer <- answer[, colnames_used, drop = FALSE]
           .pf <- sprintf('owner_data_part_%d.csv', Sys.getpid())
           data.table::fwrite(expand_to_parcels(answer, parcels),
                              .pf,
@@ -1669,20 +1725,70 @@ owner_scrape_actual = function(austin_parcel_data_merged
       # Whatever never resolved is recorded as empty, same as the original
       # behaviour -- but only after being asked SCRAPE_RETRY_PASSES times rather
       # than once, so a transient refusal is not mistaken for "no such entity".
+      #
+      # BOX-FIX: these empty rows now say WHY they are empty. `no_record` is the
+      # registry answering that nothing is filed under the name; `not_resolved`
+      # is the API never giving a usable answer across all passes. Anything that
+      # quotes a "share of owners with no Texas registration" must exclude
+      # not_resolved from the denominator, which was impossible before.
+      sweep_status <- names(pending)
+      if (is.null(sweep_status)) {
+        sweep_status <- rep(NA_character_, length(pending))
+      }
+      # A missing label can only come from a code path that predates the
+      # tagging. Call that unknown; never let it become a finding by default.
+      sweep_status[is.na(sweep_status) | sweep_status == ''] <- 'not_resolved'
       if (length(pending)) {
         message('[owner_scrape] writing ', length(pending),
                 ' unresolved owners as empty rows')
-        empty <- data.frame(t(c(rep(NA, 14), NA, NA)))
+        # BOX-FIX: built from length(colnames_used) rather than the old
+        # `t(c(rep(NA, 14), NA, NA))`, which hardcoded the column count. That
+        # form had already drifted once (14 + 2 spelled out separately) and
+        # would now emit a 16-wide row against a 17-wide schema.
+        empty <- data.frame(matrix(NA,
+                                   nrow = 1,
+                                   ncol = length(colnames_used)))
         colnames(empty) <- colnames_used
+        stopifnot(ncol(empty) == length(colnames_used))
         .pf <- sprintf('owner_data_part_%d.csv', Sys.getpid())
-        for (key_index in pending) {
+        for (i in seq_along(pending)) {
+          key_index <- unname(pending[i])
           parcels <- parcel_groups[[key_index]]
+          empty$scrape_status <- sweep_status[i]
           data.table::fwrite(expand_to_parcels(empty, parcels),
                              .pf,
                              append = file.exists(.pf),
                              sep = ',')
         }
+
+        # BOX-FIX: sidecar audit trail. owner_data_total.csv is joined and
+        # reshaped downstream and is keyed by parcel, so the unresolved set is
+        # far easier to trust when it also exists standalone and keyed by owner.
+        # Nothing reads this file -- it exists so a human can check the split by
+        # hand, independently of the main table.
+        unresolved_log <- data.frame(
+          owner_name       = owner_keys$owner_name[unname(pending)],
+          owner_address    = owner_keys$owner_address[unname(pending)],
+          scrape_status    = sweep_status,
+          passes_attempted = passes_used,
+          n_parcels        = vapply(unname(pending),
+                                    function(k) nrow(parcel_groups[[k]]),
+                                    integer(1)),
+          stringsAsFactors = FALSE)
+        data.table::fwrite(unresolved_log, 'owner_scrape_unresolved.csv',
+                           sep = ',')
       }
+
+      # BOX-FIX: state the split in the log. The whole point of the change is
+      # that this ratio is now knowable, so the run should assert it rather than
+      # make the next person re-read 150k rows to find out.
+      n_matched      <- nrow(owner_keys) - length(pending)
+      n_no_record    <- sum(sweep_status == 'no_record')
+      n_not_resolved <- sum(sweep_status == 'not_resolved')
+      message('[owner_scrape] status split over ', nrow(owner_keys),
+              ' owner keys after ', passes_used, ' pass(es): matched ',
+              n_matched, ', no_record ', n_no_record,
+              ', not_resolved ', n_not_resolved)
     }
   }
   print('done')
