@@ -481,7 +481,30 @@ situs_owner_string_dist_matrix = function(situs_owner_strings,
   #                  'strings_used_final.rds')
   print(Sys.time())
   registerDoFuture()
-  plan(multisession)
+  # BOX-FIX: cap the pool. A bare plan(multisession) takes
+  # future::availableCores(), which on the box is 128 -- and this container has
+  # no cpu limit for that call to read, so nothing was holding it down. Each of
+  # those sessions is a full R process with this project's package set loaded
+  # (~2.1 GiB RSS measured), so the pool alone wants ~270 GiB on a 188 GiB
+  # machine. It got there: the target ran 49 minutes, climbed 35 -> 177 GiB, and
+  # the container was OOM-killed (exit 137) with situs_group_assignments still
+  # dispatched. Nothing about the computation is wrong, only the fan-out.
+  #
+  # 24 is deliberately conservative rather than tuned. This loop is
+  # CPU-saturating (stringdist rebuilds the q-gram profile of all ~162k strings
+  # on every one of ~162k iterations), so throughput is not what is scarce --
+  # headroom is. 24 sessions is ~50 GiB of baseline, which leaves room for the
+  # main session's copy of strings_used_final, the inds_found accumulation, and
+  # the sparseMatrix built from it. Raise it only against a fresh measurement,
+  # the same way SCRAPE_WORKERS in scrape_helper_functions.R was sized.
+  DIST_MATRIX_WORKERS <- 24L
+  plan(multisession,
+       workers = min(DIST_MATRIX_WORKERS,
+                     max(1L, future::availableCores() - 1L)))
+  # Hand the sessions back before building the matrix. Without this the pool
+  # stays parked for the rest of the target, holding its whole baseline while
+  # sparseMatrix() allocates.
+  on.exit(plan(sequential), add = TRUE)
   # mirai::daemons(parallel::detectCores()-1)
   # daemons(parallel::detectCores())
   # mirai::mirai_map(1:100,#length(strings_used_final),
