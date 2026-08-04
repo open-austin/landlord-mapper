@@ -19,7 +19,7 @@ Texas Comptroller franchise-tax filings.
 | `typed.py` / `retype.py` | The typing pass that took the database from 1.80 GB to 1.14 GB, and a standalone retype-in-place driver. `build-db.py` imports `typed`. |
 | `seed-chunked.sh` | Fallback seeder for a host without object storage: splits the archive across deploys and stages parts on the volume. |
 | `seed-image.sh` | Earlier single-deploy seeder. Kept only for a database small enough to fit the upload cap, which this one is not. |
-| `railway.toml` | Dockerfile builder, one replica, restart on failure. Deliberately no healthcheck yet — see the file. |
+| `railway.toml` | Dockerfile builder, one replica, restart on failure, `/health` healthcheck. |
 
 ## The one thing that is not in git
 
@@ -95,17 +95,15 @@ stamping there would make the next boot believe the refresh already happened.
 
 Leave `LM_DATA_VERSION` unset for the original never-replace behaviour.
 
-## After the first successful serve
+## The healthcheck
 
-Add the healthcheck back to `railway.toml`:
+`healthcheckPath = "/health"` is enabled. It could not be enabled on the *first*
+deploy: the volume started empty, the entrypoint waited for the database, and a
+healthcheck would have failed the deployment before there was a running container
+to seed at all — the same deadlock the wait loop exists to break, one layer up.
 
-```toml
-healthcheckPath = "/health"
-healthcheckTimeout = 30
-```
-
-It is safe from then on: the volume is persistent, so restarts find the database
-already there, and the check only reports real failures.
+It is safe now. The volume is persistent, so restarts find the database already
+there and the check only reports real failures.
 
 ## Performance notes worth keeping
 
