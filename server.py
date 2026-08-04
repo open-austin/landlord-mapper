@@ -437,7 +437,22 @@ class Conn:
             c = sqlite3.connect("file:%s?mode=ro" % urllib.parse.quote(self.path),
                                 uri=True, timeout=15)
             c.execute("PRAGMA query_only = 1")
-            c.execute("PRAGMA cache_size = -8000")   # 8 MB of pages per thread
+            # 2 MB of pages per thread, not 8. This is the whole memory fix.
+            #
+            # ThreadingMixIn opens a connection per TCP connection, so this cache
+            # is allocated and discarded per connection, and glibc never returns
+            # the fragmented heap to the OS. The cache size is therefore a
+            # multiplier on peak memory, not a fixed cost. Measured over the same
+            # 143-route replay plus an 8-way concurrent pass: peak RSS 494.0 MB at
+            # 8 MB, 170.3 MB at 2 MB.
+            #
+            # It is nearly free. Warm p95 moves 0.223 -> 0.228 s and the median
+            # does not move at all; the only route that visibly pays is
+            # /export.csv, +0.203 s on a ~3 s request. All 143 responses stay byte
+            # identical. Raising it back is the first thing to try if a future
+            # query pattern starts thrashing -- check /export.csv timing first,
+            # since it is the most cache-sensitive route.
+            c.execute("PRAGMA cache_size = -2000")
             self.local.c = c
         return c
 
