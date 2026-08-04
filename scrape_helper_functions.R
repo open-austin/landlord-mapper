@@ -1484,6 +1484,24 @@ SCRAPE_WORKERS <- 48
 # pass would cost more lookups than skipping the dedup entirely.
 SCRAPE_RETRY_PASSES <- 2
 
+# BOX-FIX: top level ON PURPOSE. This used to be defined inside
+# owner_scrape_actual(), where its enclosing environment was that call frame --
+# which holds the full target_properties. future then measured the closure at
+# 1.00 GiB and aborted the whole target with a future.globals.maxSize error
+# before dispatching a single worker. Keep this at file scope.
+#
+# Expand one owner's answer out to every parcel that owner holds. A lookup can
+# legitimately return several rows (one per officer), so this crosses
+# answer-rows by parcels.
+expand_to_parcels <- function(answer, parcels) {
+  do.call(rbind, lapply(seq_len(nrow(parcels)), function(p) {
+    row <- answer
+    row$situs_pID     <- parcels$situs_pID[p]
+    row$situs_address <- parcels$situs_address[p]
+    row
+  }))
+}
+
 # BOX-FIX: fold per-worker scrape part files into owner_data_total.csv.
 #
 # The scrape loops used to have every parallel worker append to one shared
@@ -1573,25 +1591,30 @@ owner_scrape_actual = function(austin_parcel_data_merged
                                        'situs_pID', 'situs_address')]
       owner_keys <- unique(tp_slim[, c('owner_name', 'owner_address')])
 
-      # Expand one owner's answer out to every parcel that owner holds. A lookup can
-      # legitimately return several rows (one per officer), so this crosses
-      # answer-rows by parcels.
-      expand_to_parcels <- function(answer, parcels) {
-        do.call(rbind, lapply(seq_len(nrow(parcels)), function(p) {
-          row <- answer
-          row$situs_pID     <- parcels$situs_pID[p]
-          row$situs_address <- parcels$situs_address[p]
-          row
-        }))
-      }
-      parcels_for <- function(nm, addr) {
-        tp_slim[tp_slim$owner_name == nm & tp_slim$owner_address == addr,
-                c('situs_pID', 'situs_address'), drop = FALSE]
-      }
+      # BOX-FIX: group each owner's parcels ONCE here on the main session, instead
+      # of having the worker rescan all of tp_slim per key (~95.8k linear scans
+      # over ~153k rows). parcel_groups[[i]] is owner_keys row i's parcels, so the
+      # worker does an O(1) list lookup. Built on a factor whose levels ARE the
+      # owner_keys order, which is what keeps the two aligned.
+      key_sep <- '\u0001'   # cannot occur in a name or address
+      key_of_row <- paste(tp_slim$owner_name, tp_slim$owner_address, sep = key_sep)
+      key_levels <- paste(owner_keys$owner_name, owner_keys$owner_address,
+                          sep = key_sep)
+      parcel_groups <- split(tp_slim[, c('situs_pID', 'situs_address')],
+                             factor(key_of_row, levels = key_levels))
+      stopifnot(length(parcel_groups) == nrow(owner_keys))
 
       doFuture::registerDoFuture()
       future::plan(future::multisession, workers = SCRAPE_WORKERS)
       on.exit(future::plan(future::sequential), add = TRUE)
+
+      # BOX-FIX: parcel_groups is ~34 MiB and legitimately has to reach every
+      # worker, which is over future's cautious 500 MiB default once the rest of
+      # the exported set is counted. Raise it for this call only. This is a
+      # deliberate export, not the accidental frame capture that crashed the run.
+      .old_max <- getOption('future.globals.maxSize')
+      options(future.globals.maxSize = 2 * 1024^3)
+      on.exit(options(future.globals.maxSize = .old_max), add = TRUE)
 
       message('[owner_scrape] ', nrow(tp_slim), ' parcels -> ',
               nrow(owner_keys), ' distinct owners, ', SCRAPE_WORKERS, ' workers')
@@ -1615,7 +1638,7 @@ owner_scrape_actual = function(austin_parcel_data_merged
 
           # situs_* are pass-through labels for the lookup, so the first parcel's
           # are fine; each parcel gets its own stamped copy in expand_to_parcels().
-          parcels <- parcels_for(owner_name, owner_address)
+          parcels <- parcel_groups[[key_index]]
           answer <- tryCatch({
             insist_scrape_owner(owner_name,
                                 situs_pID = parcels$situs_pID[1],
@@ -1653,8 +1676,7 @@ owner_scrape_actual = function(austin_parcel_data_merged
         colnames(empty) <- colnames_used
         .pf <- sprintf('owner_data_part_%d.csv', Sys.getpid())
         for (key_index in pending) {
-          parcels <- parcels_for(owner_keys$owner_name[key_index],
-                                 owner_keys$owner_address[key_index])
+          parcels <- parcel_groups[[key_index]]
           data.table::fwrite(expand_to_parcels(empty, parcels),
                              .pf,
                              append = file.exists(.pf),
