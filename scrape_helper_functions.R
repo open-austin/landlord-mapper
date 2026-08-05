@@ -1151,6 +1151,131 @@ ingest_proton_pacs_cad_data = function(zipfile_used){
   
   
 }
+
+# ---------------------------------------------------------------------------
+# Travis living area, taken from the county's own improvement detail.
+#
+# Travis is excluded from ingest_proton_pacs_cad_data()'s county list, because
+# its parcel rows come from the TCAD JSON export instead. The side effect is
+# that Travis never passes through the improvement-detail filter every other
+# county gets, so target_property_gen() published TCAD's `imprvTotalArea`
+# verbatim as `totalsqftlivingarea`.
+#
+# `imprvTotalArea` is the sum of EVERY improvement-detail segment on a property.
+# It is not a living area, and some of what it sums is not even an area.
+# Measured on prop_id 245173, a one-storey 1958 house:
+#
+#     1ST FLOOR         1754.0   <- the actual living area
+#     HVAC RESIDENTIAL  1754.0   <- the same floor area, counted a second time
+#     BATHROOM             1.7   <- a bathroom COUNT, added as if square feet
+#     TERRACE UNCOVERD   284.0
+#     GARAGE DET 1ST F   528.0
+#     Sketch Only        288.0
+#                     = 4609.7   <- what was published, against a real 1754
+#
+# County-wide that put the median A1 parcel at 4,748 sq ft against 1,716-2,145
+# in the twelve other counties. The bathroom counts show up in the aggregate:
+# 111,716 Travis rows carried a fractional square footage, clustering on .5 and
+# .7, while Hays and Williamson -- the other two counties with their own
+# non-PACS source -- had none at all.
+#
+# The knock-on is property_units, which is round(area/900) for every class the
+# ladder in target_property_gen() does not pin to a fixed count. B1 apartment
+# parcels are pinned to nothing, so 2,074 in-scope Travis B1 parcels alone
+# carried 551,150 published units against a real 279,674.
+#
+# Deliberately NOT reused here: the AREA|LIVING|...|RES regex from the PACS
+# path. Against Travis's actual vocabulary that regex drops `1ST FLOOR` outright
+# and keeps `PAVED AREA` (505 m sq ft county-wide), so it lands near the right
+# answer on houses only by accident -- via HVAC RESIDENTIAL happening to mirror
+# the floor area -- and it misses multifamily entirely, because apartment
+# parcels carry no HVAC RESIDENTIAL segment. Match the segment types Travis
+# actually uses for conditioned floor space instead.
+#
+# Parcels left with no conditioned floor area are meant to end up with 0. The
+# ones this affects are paved lots and amenity tracts, not buildings: 86% of F3
+# parcels lose their area, and F3 is dominated by PAVED AREA (9.2 m sq ft),
+# tennis courts and private streets, with only 138 of 629 carrying any floor at
+# all. Those parcels were contributing 11,336 "housing units" derived from
+# paving. Same story for A3, which is subdivision common area.
+TRAVIS_LIVING_SEGMENTS <- c('1ST FLOOR',
+                            '2ND FLOOR',
+                            '3RD FLOOR',
+                            '4TH FLOOR',
+                            '5TH FLOOR',
+                            'ADDITIONAL FLOOR',
+                            'HALF FLOOR',
+                            'FINISHED BASEMENT',
+                            'RESIDENCE BELOW',
+                            'PENTHOUSE',
+                            'LIVING QUARTERS')
+
+travis_living_area = function(zipfile_used){
+  folder <- file.path(gsub('.zip', '', zipfile_used))
+  # ingest_proton_pacs_cad_data() unzips this same archive and leaves the folder
+  # in place, and it is 2.5 GB, so do not pay for it twice.
+  if(!dir.exists(folder)){
+    unzip(zipfile_used, exdir = folder)
+  }
+  counties <- list.files(folder)
+  while(length(counties) == 1){
+    folder <- file.path(folder, counties)
+    counties <- list.files(folder)
+  }
+  travis_dir <- file.path(folder,
+                          counties[grepl('Travis',
+                                         counties,
+                                         ignore.case = TRUE)][1])
+  inner <- list.files(travis_dir,
+                      pattern = '[.]zip$',
+                      full.names = TRUE)
+  if(length(inner) == 0){
+    warning('travis_living_area: no appraisal export zip under ', travis_dir)
+    return(data.frame(situs_pID = numeric(0),
+                      travis_living_sqft = numeric(0)))
+  }
+  # Extract ONLY the improvement-detail member. The archive also holds
+  # PROP_ENT.TXT at 8.5 GB and PROP.TXT at 4.5 GB, so a full unzip would cost
+  # ~17 GB of scratch for a file we do not read.
+  members <- unzip(inner[1], list = TRUE)$Name
+  det_member <- members[grepl('IMP_DET[.]TXT$|APPRAISAL_IMPROVEMENT_DETAIL[.]TXT$',
+                              members,
+                              ignore.case = TRUE)][1]
+  if(is.na(det_member)){
+    warning('travis_living_area: no improvement detail file in ', inner[1])
+    return(data.frame(situs_pID = numeric(0),
+                      travis_living_sqft = numeric(0)))
+  }
+  scratch <- file.path(tempdir(), 'travis_imprv_detail')
+  unzip(inner[1],
+        files = det_member,
+        exdir = scratch,
+        junkpaths = TRUE)
+  det_file <- file.path(scratch, basename(det_member))
+
+  improvement_fields <- readxl::read_xlsx("Appraisal Export Layout - 8.0.30.xlsx",
+                                          skip = 930, n_max = 13)
+  detail <- ingest_pacs_txt_data(det_file, improvement_fields)
+
+  # The 2025 certified export carries a single prop_val_yr, but a later supplement
+  # could carry two, and summing across years would double every parcel.
+  detail <- detail %>%
+    dplyr::mutate(prop_val_yr = as.numeric(prop_val_yr)) %>%
+    dplyr::filter(prop_val_yr == max(prop_val_yr, na.rm = TRUE))
+
+  living <- detail %>%
+    dplyr::filter(toupper(trimws(Imprv_det_type_desc)) %in% TRAVIS_LIVING_SEGMENTS) %>%
+    dplyr::mutate(situs_pID = as.numeric(prop_id),
+                  imprv_det_area = as.numeric(imprv_det_area)) %>%
+    dplyr::group_by(situs_pID) %>%
+    dplyr::summarise(travis_living_sqft = sum(imprv_det_area, na.rm = TRUE))
+
+  unlink(det_file)
+  print(sprintf('travis_living_area: %d parcels with conditioned floor area',
+                nrow(living)))
+  data.frame(living)
+}
+
 cpa_api_request = function(base_string,
                            input,
                            api_key_used){

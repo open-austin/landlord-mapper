@@ -236,7 +236,8 @@ target_property_gen = function(propertyChar_data,
                                deeds_data,
                                legal_data,
                                agent_data,
-                               ownerValue_data){
+                               ownerValue_data,
+                               travis_imprv_area = NULL){
   agent_data <- agent_data %>%
     group_by(agent_pAccountID,agent_year) %>%
     summarise(agent_pID = last(agent_pID),
@@ -336,6 +337,26 @@ target_property_gen = function(propertyChar_data,
                                                     )
                                                )
   
+  # Replace TCAD's imprvTotalArea with the conditioned floor area summed from
+  # Travis's own improvement detail. See travis_living_area() in
+  # scrape_helper_functions.R for what imprvTotalArea actually sums and why it is
+  # not a living area. Done HERE, above the property_units ladder and above the
+  # rename to totalsqftlivingarea, so both consumers pick up the corrected value
+  # with no further change.
+  #
+  # A parcel with no conditioned floor segment correctly lands at 0: those are
+  # paved lots and subdivision common area, not buildings.
+  if(!is.null(travis_imprv_area) && nrow(travis_imprv_area) > 0){
+    matched_area <- travis_imprv_area$travis_living_sqft[
+      match(as.numeric(austin_parcel_data_merged$situs_pID),
+            as.numeric(travis_imprv_area$situs_pID))]
+    print(sprintf('travis area: %d of %d parcels matched the improvement detail',
+                  sum(!is.na(matched_area)),
+                  length(matched_area)))
+    austin_parcel_data_merged$propertyProf_imprvTotalArea <-
+      ifelse(is.na(matched_area), 0, matched_area)
+  }
+
   austin_parcel_data_merged$property_units = round(austin_parcel_data_merged$propertyProf_imprvTotalArea/900)
   austin_parcel_data_merged[which((austin_parcel_data_merged$propertyProf_imprvStateCd %in%
                                      c('A1','A2','A3'))|

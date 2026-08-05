@@ -179,6 +179,9 @@ list(
              command = parse_hays_cad_data(),
            # skip = any(grepl('hays_data',list.files('_targets/objects'))),
              deployment = 'main'),
+  tar_target(travis_imprv_area,
+             command = travis_living_area('AUSTIN–SAN ANTONIO METROPLEX (13 of 13).zip'),
+             deployment = 'main'),
   tar_target(pacs_data,
              command = ingest_proton_pacs_cad_data('AUSTIN–SAN ANTONIO METROPLEX (13 of 13).zip'),
            # skip = any(grepl('pacs_data',list.files('_targets/objects'))),
@@ -286,7 +289,8 @@ list(
                                  deed_summ_data,
                                  legal_data,
                                  agent_data,
-                                 ownerValue_data
+                                 ownerValue_data,
+                                 travis_imprv_area
                                  ),
              deployment = 'main'),
   tar_target(austin_parcel_data_merged,
