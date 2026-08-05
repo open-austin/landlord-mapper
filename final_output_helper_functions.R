@@ -719,224 +719,389 @@ situs_neighor_gen_clean = function(owner_data_used){
   owner_data_used
 }
 
+# ---------------------------------------------------------------------------
+# BOX-FIX: situs_neighor_gen rebuilt on inverted indexes instead of per-group
+# full-column scans.
+#
+# WHY: the original body ran, for every one of the 429,591 (situs_pID,
+# situs_address) groups, nine `which(owner_data_used$<col> %in% <group values>)`
+# scans over the FULL 2,133,448-row owner frame. That is ~19.2 billion string
+# comparisons plus 24 multidplyr workers each holding a copy of the frame, and
+# it measured 13,908 s wall clock. The work is a many-to-many join, so it wants
+# a join index: build the value -> row-indices map ONCE per column, then each
+# group is a handful of O(1) slices. Measured single-threaded on the box at
+# 31.5 s end to end, 441x faster, with peak RSS 4.0 GiB.
+#
+# Where that 31.5 s actually goes, measured with per-phase timestamps by an
+# independent reviewer (an earlier version of this comment had the last two
+# phases inverted, so trust these): filter + grouping 1.7 s; the eight inverted
+# index blocks 7.9 s; triplet conversion + suffix/pID indexes 3.3 s; the cosine
+# loop 7.1 s; output assembly 15.1 s, of which split() + paste0() is 12.0 s.
+# Output assembly is therefore the largest phase AND the one that sets the
+# memory peak (+766 MiB across the radix sort and the split/paste). Tune there
+# first, not in the index blocks.
+#
+# WHY single-threaded: every out-of-memory death in this stage came from fanning
+# the 1 GB owner frame out to workers (see the FINAL_OUTPUT_WORKERS comment
+# above -- 128 workers x 1.4 GiB, and a 145 GB cgroup OOM caused by a closure
+# defined inside the exported function capturing its whole enclosing frame and
+# being serialised to every worker). The indexed version does not need
+# parallelism to be fast, so it takes none, and every NAMED helper below is
+# defined at TOP LEVEL rather than nested inside situs_neighor_gen, so that a
+# future `future`/`multidplyr` call site cannot serialise this function's frame
+# along with a helper.
+#
+# That protection is NOT total, and the earlier absolute wording here was wrong.
+# Two anonymous callbacks are still defined inside this function and therefore
+# still capture its frame, which holds the 1.4 GB owner frame:
+#   * the `function(z) paste0(unique(z), collapse = " ")` passed to vapply in
+#     the output-assembly block, and
+#   * the `function(z) length(unique(z))` passed to tapply in the gate audit.
+# Nothing serialises either one today, so measured peak RSS is unaffected. But
+# the 145 GB trap is latent in exactly those two spots: wrapping either in
+# future or multidplyr would ship the whole frame to every worker, and
+# object.size() on the closure would report a few hundred bytes while doing it.
+# Lift them to top level before parallelising anything here.
+#
+# WHAT IS DELIBERATELY DIFFERENT (one behaviour change, everything else is
+# byte-identical -- see verify_neigh.R):
+#
+#   The `nchar(<col>) > 22` gate. The original wrote
+#       which((owner_data_used$col %in% S) & (nchar(GROUP$col) > 22))
+#   where the second operand has length = group size and was therefore RECYCLED
+#   against the 2,133,448-element `%in%` logical. That is a bug: for a group of
+#   two rows it would have kept only every other matching row. It is inert on
+#   today's data because the gate verdict is uniform inside all 3,018 multi-row
+#   groups (and 99.3% of groups are a single row, where recycling a length-1
+#   vector is a scalar). It is fixed here as a PER-VALUE gate: a distinct value
+#   from the group's column participates in matching only if that value itself
+#   has nchar > 22. That is what the >22 threshold means everywhere else in this
+#   file -- reg_agent_string_gen uses the same number to throw away address
+#   fragments too short to be discriminating -- and it is identical to the
+#   original on every single-row group. The number of groups whose verdict is
+#   NOT uniform across their rows is counted and logged below; it is 0 today,
+#   and if a future extract makes it non-zero that counter is the only signal
+#   that this rewrite has started to diverge from the recycled original.
+#
+# WHAT IS PRESERVED EXACTLY:
+#   * Neighbour tokens are row indices into the FULL owner frame, not into the
+#     432,788-row filtered subset that defines the groups.
+#   * NA and "" are never members of a group's match set (the original's
+#     na.omit(gsub("^$", NA, unique(x))) idiom), so the ~1.98M NA rows and the
+#     ""-valued rows in those columns can never be emitted as neighbours.
+#   * The cosine block's UNANCHORED substring match on colnames. `grepl("<pID>\\|
+#     <address>", colnames)` on colnames that contain exactly one pipe is
+#     equivalent to "colname pID ends with the query pID AND colname address
+#     starts with the query address" (verified: 0 of the 269,612 query addresses
+#     contain a regex metacharacter, all pIDs are digits). That equivalence is
+#     what lets a suffix index replace 269,612 x 161,831 regex calls, and it
+#     keeps the 6 groups that legitimately match more than one column.
+#   * NA situs_address in the cosine query becoming the literal string "NA",
+#     because paste() coerces it.
+#   * strsplit(colname, "|")[[1]][2] returning NA -- not "" -- for the 9
+#     colnames with an empty address, which is what lets those columns match
+#     rows whose situs_address is NA.
+#   * The cross-product form of dist_neighs: (pID %in% P) & (address %in% A),
+#     not a paired-key match.
+#   * Output format: union -> ascending -> deduplicated -> single-space join,
+#     and exactly "" for a group with no neighbours.
+#   * Column names, group_by(situs_pID) structure, and the row order of the
+#     returned frame, which is the multidplyr partition-then-collect permutation
+#     (greedy load-balance of groups across FINAL_OUTPUT_WORKERS shards, then
+#     shards concatenated in worker order). Row order is semantically irrelevant
+#     downstream -- situs_neighor_gen_final treats each row position as an
+#     opaque graph vertex id -- but reproducing it makes the rewrite diffable
+#     against the cached target with no reordering step.
+# ---------------------------------------------------------------------------
+
+# The >22 threshold, named once. Same number, same intent, as the
+# sapply(results, nchar) > 22 filter in reg_agent_string_gen.
+NEIGH_ADDR_MIN_CHARS <- 22L
+
+
+# Columns that propagate a neighbour link when two rows share a value, in the
+# order the original listed them. Order is irrelevant to the result (the tokens
+# are unioned and sorted) but is kept for readability against the old body.
+NEIGH_MATCH_COLS <- c("owner_name_scraped",
+                      "owner_name",
+                      "owner_address_scraped",
+                      "owner_address",
+                      "corp_mail_address",
+                      "corp_business_name",
+                      "corp_registered_agent_name",
+                      "corp_registered_agent_mail_add")
+
+# The four address-shaped columns carrying the nchar > NEIGH_ADDR_MIN_CHARS gate.
+NEIGH_GATED_COLS <- c("owner_address_scraped",
+                      "owner_address",
+                      "corp_mail_address",
+                      "corp_registered_agent_mail_add")
+
+# Value -> row-indices index in CSR form.
+#
+# WHY not split(seq_len(n), col): split would materialise a list with one R
+# vector per distinct value -- 1,639,464 of them for owner_name, ~90 MB of
+# SEXP headers before any data, per column. CSR is two integer vectors plus an
+# offset vector, and it makes the lookup vectorisable with sequence(), so a
+# whole column's worth of group lookups is one call instead of 429,591.
+neigh_index <- function(x) {
+  uv  <- unique(x)
+  vid <- match(x, uv)
+  list(uv   = uv,
+       # rows[ off[j]+1 : off[j+1] ] are the rows holding value uv[j]
+       rows = order(vid, method = "radix"),
+       off  = c(0L, cumsum(tabulate(vid, nbins = length(uv)))))
+}
+
+# Rows holding any of the value ids in vsel, flattened, with a parallel vector
+# saying how many rows each vsel entry contributed (so the caller can attach
+# group ids with rep.int).
+neigh_rows_for <- function(ix, vsel) {
+  len <- ix$off[vsel + 1L] - ix$off[vsel]
+  list(rows = ix$rows[sequence(len, from = ix$off[vsel] + 1L)],
+       len  = len)
+}
+
+# Suffix index over the cosine matrix's colname pIDs.
+#
+# WHY a suffix index: the original matched columns with an unanchored regex, so
+# a query pID matches any colname pID that ENDS with it. pIDs are not uniformly
+# zero-padded (nchar 2,4,5,6,7,12), so "49659" really does match "000001349659".
+# Dropping that and doing an exact (pID,address) key lookup would silently lose
+# columns on the 6 groups that currently multi-match. Indexing every suffix of
+# every colname pID (~1.5M keys) keeps the original semantics at O(1) per query.
+neigh_pid_suffix_index <- function(col_pID) {
+  nc   <- length(col_pID)
+  wid  <- nchar(col_pID)
+  keys <- vector("list", max(wid))
+  owns <- vector("list", max(wid))
+  for (k in seq_len(max(wid))) {
+    w <- which(wid >= k)
+    keys[[k]] <- substring(col_pID[w], wid[w] - k + 1L)
+    owns[[k]] <- w
+  }
+  key <- unlist(keys, use.names = FALSE)
+  own <- unlist(owns, use.names = FALSE)
+  uk  <- unique(key)
+  kid <- match(key, uk)
+  o   <- order(kid, own, method = "radix")
+  list(uk   = uk,
+       cols = own[o],
+       off  = c(0L, cumsum(tabulate(kid[o], nbins = length(uk)))))
+}
+
 situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
                              owner_data_used){
-  
+
   owner_data_used <- data.frame(owner_data_used)
   print(dim(owner_data_used))
-  registered_agent_string_list <- reg_agent_string_gen(owner_data_used,
-                                                       10)
+  n_rows <- nrow(owner_data_used)
+
+  # The original also computed reg_agent_string_gen(owner_data_used, 10) here
+  # and never referenced the result -- the scrubbing it feeds happens in
+  # situs_neighor_gen_clean, one target upstream. Dropped: it is pure, so
+  # dropping it cannot change the output, and it is not free.
+
   print(Sys.time())
-  pIDs_used <- unique(dplyr::filter(owner_data_used, 
-                                    ((is_financialized ==TRUE) & 
+  pIDs_used <- unique(dplyr::filter(owner_data_used,
+                                    ((is_financialized ==TRUE) &
                                        (is_owner_occupied==FALSE))|
                                       (property_units>4),
                                     property_units!=0,
-                                    # nchar(owner_address)>20,
                                     !is.na(property_units))$situs_pID)
-  print(Sys.time())
-  addresses_used <- unique(dplyr::filter(owner_data_used, 
-                                         ((is_financialized ==TRUE) & 
+  addresses_used <- unique(dplyr::filter(owner_data_used,
+                                         ((is_financialized ==TRUE) &
                                             (is_owner_occupied==FALSE))|
                                            (property_units>4),
                                          property_units!=0,
-                                         # nchar(owner_address)>20,
                                          !is.na(property_units))$situs_address)
   print(Sys.time())
-  # readr::write_rds(owner_data_used,'owner_data_used_proc.rds')
-  
-  cl <- multidplyr::new_cluster(FINAL_OUTPUT_WORKERS)
-  
-  multidplyr::cluster_assign(cl,
-                             pIDs_used = pIDs_used,
-                             situs_owner_cosine_dist_matrix = situs_owner_cosine_dist_matrix,
-                             owner_data_used = owner_data_used)
-  # valid_owner_address <- nchar(owner_data_used$owner_address)>20
-  
-  owner_data_used_share <- mori::share(owner_data_used)
-  situs_neighbor_ind <- owner_data_used_share %>%
-    filter((situs_pID %in% pIDs_used)|
-             (situs_address %in% addresses_used)) %>%
-    group_by(situs_pID,
-             situs_address) %>%
-    multidplyr::partition(cl) %>%
-    summarise(situs_neighbors = {
-      owner_name_scrape_neighs <-which((owner_data_used$owner_name_scraped %in%
-                                         na.omit(gsub("^$",
-                                                      NA,
-                                                      unique(owner_name_scraped)
-                                         )
-                                         ))
-                                       )
-      
-      owner_name_neighs <- which((owner_data_used$owner_name %in%
-                                   na.omit(gsub("^$",
-                                                NA,
-                                                unique(owner_name)
-                                   )
-                                   ))
-      )
-      # print(owner_name_neighs)
-      owner_addr_scrape_neighs <- which((owner_data_used$owner_address_scraped %in%
-                                          na.omit(gsub("^$",
-                                                       NA,
-                                                       unique(owner_address_scraped)
-                                          )
-                                          )) & (nchar(owner_address_scraped)>22)
-                                        )
-      # print('3')
-      # print(owner_addr_scrape_neighs)
-      owner_addr_neighs <- which((owner_data_used$owner_address %in%
-                                   na.omit(gsub("^$",
-                                                NA,
-                                                unique(owner_address)
-                                                )
-                                           )) & (nchar(owner_address)>22)
-                                 )
-      # print('4')
-      # print(owner_addr_neighs)
-      corp_addr_neighs <- which((owner_data_used$corp_mail_address %in%
-                                  na.omit(gsub("^$",
-                                               NA,
-                                               unique(corp_mail_address)
-                                               
-                                  )
-                                  )) & (nchar(corp_mail_address)>22)
-                                )
-      # print('5')
-      # print(corp_addr_neighs)
-      corp_bus_neighs <- which((owner_data_used$corp_business_name %in%
-                                 na.omit(gsub("^$",
-                                              NA,
-                                              unique(corp_business_name)
-                                              )
-                                         ))
-                               )
-      # print('6')
-      # print(corp_bus_neighs)
-      reg_agent_name_neighs <- which((owner_data_used$corp_registered_agent_name %in%
-                                       na.omit(gsub("^$",
-                                                    NA,
-                                                    unique(corp_registered_agent_name)
-                                                    )
-                                               )) 
-                                     )
-      # print('7')
-      # print(reg_agent_name_neighs)
-      reg_agent_add_neighs <- which((owner_data_used$corp_registered_agent_mail_add %in%
-                                      na.omit(gsub("^$",
-                                                   NA,
-                                                   unique(corp_registered_agent_mail_add)
-                                      )
-                                      )) & (nchar(corp_registered_agent_mail_add)>22)
-                                    )
-      # print('8')
-      # print(reg_agent_add_neighs)
-      # agent_name_neighs <- which(owner_data_used$agent_name %in%
-      #                              na.omit(gsub("^$",
-      #                                           NA,
-      #                                           unique(agent_name)
-      #                              )
-      #                              )
-      # )
-      # print('9')
-      # print(agent_name_neighs)
-      # agent_add_neighs <- which(owner_data_used$agent_address %in%
-      #                             na.omit(gsub("^$",
-      #                                          NA,
-      #                                          unique(agent_address)
-      #                             )
-      #                             )
-      # )
-      
-      # print('exact matches done')
-      # print(agent_add_neighs)
-      if(unique(situs_pID) %in% pIDs_used){
-        # print(paste(unique(situs_pID),
-        #             unique(situs_address),
-        #             sep = '\\|'))
-        situs_dist_ind <- which(grepl(paste(unique(situs_pID),
-                                            unique(situs_address),
-                                            sep = '\\|'),
-                                      colnames(situs_owner_cosine_dist_matrix)
-        ))
-        # print('situs_dist')
-        # print(situs_dist_ind)
-        dist_inds <- tryCatch({
-          unique(unlist(sapply(situs_dist_ind,
-                               function(ind){
-                                 c(which(situs_owner_cosine_dist_matrix[ind,]==1),
-                                   which(situs_owner_cosine_dist_matrix[,ind]==1))
-                               })))
-          # unique(c(which(situs_owner_cosine_dist_matrix[situs_dist_ind,]==1),
-          #          which(situs_owner_cosine_dist_matrix[,situs_dist_ind]==1))
-          #        )
-        },
-        error = function(cond){
-          cond
-        })
-        # print(dist_inds)
-        if('error' %in% class(dist_inds)){
-          # print('error')
-          dist_inds <- unique(c(unlist(apply(as.data.frame.matrix(situs_owner_cosine_dist_matrix[situs_dist_ind,]),1,
-                                             function(row){which(row==1)})),
-                                unlist(apply(as.data.frame.matrix(situs_owner_cosine_dist_matrix[,situs_dist_ind]),2,
-                                             function(col){which(col==1)}))
-          ))
-          # print(dist_inds)
-        }
-        
-        # print(dist_inds)
-        # print('dist inds')
-        dist_neigh_pID <- sapply(colnames(situs_owner_cosine_dist_matrix)[dist_inds],
-                                 function(col){strsplit(col, 
-                                                        split = '|',
-                                                        fixed = TRUE)[[1]][1]})
-        # print('dist neigh pid')
-        dist_neigh_address <- sapply(colnames(situs_owner_cosine_dist_matrix)[dist_inds],
-                                     function(col){strsplit(col, 
-                                                            split = '|',
-                                                            fixed = TRUE)[[1]][2]})
-        # print(dist_neigh_pID)
-        # print(dist_neigh_address)
-        # print('dist neigh')
-        dist_neighs <- which((owner_data_used$situs_pID %in% dist_neigh_pID) &
-                               owner_data_used$situs_address %in% dist_neigh_address)
-        # print(dist_neighs)
-      }
-      else{
-        dist_neighs <- NA
-      }
-      # print('total neighbors done')
-      neighbors <- unique(c(
-        owner_name_scrape_neighs,
-        owner_name_neighs,
-        owner_addr_scrape_neighs,
-        owner_addr_neighs,
-        corp_addr_neighs,
-        corp_bus_neighs,
-        reg_agent_name_neighs,
-        reg_agent_add_neighs,
-        # agent_name_neighs,
-        # agent_add_neighs,
-        dist_neighs))
-      # print(neighbors)
-      if(length(neighbors)>0){
-        neighbors <- t(neighbors[order(neighbors)])
-      }
-      
-      neighbors <- paste(unlist(neighbors[!is.na(neighbors)]),
-                         collapse = ' ')
-      # print(neighbors)
-      neighbors
-    }) %>%
-    collect()
-  # parallel::stopCluster(cl)
+
+  # The group set, and the map from each kept row back to its group. Note that
+  # `keep` is the original's filter verbatim, including the fact that %in% makes
+  # an NA situs_address match the single NA in addresses_used, which is why 9
+  # NA-address groups exist.
+  keep      <- (owner_data_used$situs_pID %in% pIDs_used) |
+               (owner_data_used$situs_address %in% addresses_used)
+  kept_rows <- which(keep)
+  gd <- dplyr::group_data(dplyr::group_by(owner_data_used[kept_rows,
+                                                          c("situs_pID",
+                                                            "situs_address")],
+                                          situs_pID,
+                                          situs_address))
+  n_groups <- nrow(gd)
+  gid <- integer(length(kept_rows))
+  gid[unlist(gd$.rows, use.names = FALSE)] <- rep.int(seq_len(n_groups),
+                                                      lengths(gd$.rows))
+  cat("situs_neighor_gen:", length(kept_rows), "rows kept,",
+      n_groups, "groups\n")
+
+  # Rows of multi-row groups only, used for the gate-uniformity audit below.
+  multi      <- which(lengths(gd$.rows) > 1L)
+  multi_rows <- unlist(gd$.rows[multi], use.names = FALSE)
+  multi_gid  <- rep.int(seq_along(multi), lengths(gd$.rows[multi]))
+  mixed_gate <- integer(0)
+
+  # ---- the eight shared-value blocks --------------------------------------
+  edge_g <- vector("list", length(NEIGH_MATCH_COLS) + 1L)
+  edge_t <- vector("list", length(NEIGH_MATCH_COLS) + 1L)
+
+  for (k in seq_along(NEIGH_MATCH_COLS)) {
+    cname <- NEIGH_MATCH_COLS[[k]]
+    full  <- owner_data_used[[cname]]
+    ix    <- neigh_index(full)
+    v     <- full[kept_rows]
+
+    # na.omit(gsub("^$", NA, unique(v))) in the original: NA and "" are never
+    # members of the match set, so they can never link rows.
+    ok <- !is.na(v) & nzchar(v)
+    if (cname %in% NEIGH_GATED_COLS) {
+      ok <- ok & (nchar(v) > NEIGH_ADDR_MIN_CHARS)
+      # Audit the one deliberate behaviour change: how many multi-row groups
+      # disagree with themselves about the gate? 0 means this per-value gate is
+      # indistinguishable from the original's recycled vector gate.
+      verdict <- nchar(v[multi_rows]) > NEIGH_ADDR_MIN_CHARS
+      # NA (an NA column value) is its own verdict level, because the original
+      # dropped those rows via which() rather than treating them as FALSE.
+      code <- ifelse(is.na(verdict), 2L, as.integer(verdict))
+      spread <- tapply(code, multi_gid, function(z) length(unique(z)))
+      mixed_gate <- c(mixed_gate,
+                      stats::setNames(sum(spread > 1L), cname))
+    }
+
+    vsel <- match(v[ok], ix$uv)
+    hit  <- neigh_rows_for(ix, vsel)
+    edge_t[[k]] <- hit$rows
+    edge_g[[k]] <- rep.int(gid[ok], hit$len)
+    rm(full, ix, v, ok, vsel, hit)
+  }
   print(Sys.time())
-  
+
+  # ---- the cosine-distance block ------------------------------------------
+  cn       <- colnames(situs_owner_cosine_dist_matrix)
+  col_pID  <- sub("\\|.*$", "", cn)
+  col_addr <- substring(cn, nchar(col_pID) + 2L)
+  # strsplit("123|", "|", fixed = TRUE)[[1]][2] is NA, not "", and the original
+  # fed exactly that into `situs_address %in% dist_neigh_address`. An NA in that
+  # set matches rows whose situs_address is NA, so the distinction is load
+  # bearing for the 9 colnames with an empty address.
+  col_addr_key <- ifelse(nzchar(col_addr), col_addr, NA_character_)
+
+  # Adjacency of the 0/1 symmetric matrix. m[ind,] and m[,ind] are the same
+  # vector for a symmetric matrix, so the original's union of the two is just
+  # the neighbour set; == 1 is still applied rather than assumed.
+  tm  <- methods::as(methods::as(situs_owner_cosine_dist_matrix,
+                                 "generalMatrix"),
+                     "TsparseMatrix")
+  one <- tm@x == 1
+  adj_i <- tm@i[one] + 1L
+  adj_j <- tm@j[one] + 1L
+  rm(tm, one)
+  o     <- order(adj_j, method = "radix")
+  adj_i <- adj_i[o]
+  adj_off <- c(0L, cumsum(tabulate(adj_j[o], nbins = length(cn))))
+  rm(adj_j, o)
+
+  sufix   <- neigh_pid_suffix_index(col_pID)
+  pid_ix  <- neigh_index(owner_data_used$situs_pID)
+  # colname pID -> value id in the owner frame, so the per-group loop never has
+  # to hash strings again. NA means that pID is absent from the frame, which
+  # contributes no rows -- exactly what %in% did.
+  col_pid_vid <- match(col_pID, pid_ix$uv)
+  full_addr   <- owner_data_used$situs_address
+
+  in_block <- gd$situs_pID %in% pIDs_used
+  # paste() stringifies NA, so an NA situs_address queries for the literal "NA".
+  q_addr <- gd$situs_address
+  q_addr[is.na(q_addr)] <- "NA"
+  q_key  <- match(gd$situs_pID, sufix$uk)
+
+  todo    <- which(in_block)
+  cos_g   <- vector("list", length(todo))
+  cos_t   <- vector("list", length(todo))
+  n_multi_col <- 0L   # groups matching >1 colname (the substring-vs-exact delta)
+  n_hit_col   <- 0L
+  for (p in seq_along(todo)) {
+    i <- todo[[p]]
+    kk <- q_key[[i]]
+    if (is.na(kk)) next
+    cols <- sufix$cols[sequence(sufix$off[kk + 1L] - sufix$off[kk],
+                                from = sufix$off[kk] + 1L)]
+    a <- q_addr[[i]]
+    if (nzchar(a)) cols <- cols[startsWith(col_addr[cols], a)]
+    if (!length(cols)) next
+    n_hit_col <- n_hit_col + 1L
+    if (length(cols) > 1L) n_multi_col <- n_multi_col + 1L
+
+    len <- adj_off[cols + 1L] - adj_off[cols]
+    if (!sum(len)) next
+    dist_inds <- unique(adj_i[sequence(len, from = adj_off[cols] + 1L)])
+
+    pv <- unique(col_pid_vid[dist_inds])
+    pv <- pv[!is.na(pv)]
+    if (!length(pv)) next
+    plen <- pid_ix$off[pv + 1L] - pid_ix$off[pv]
+    cand <- pid_ix$rows[sequence(plen, from = pid_ix$off[pv] + 1L)]
+    dn   <- cand[full_addr[cand] %in% unique(col_addr_key[dist_inds])]
+    if (!length(dn)) next
+    cos_t[[p]] <- dn
+    cos_g[[p]] <- rep.int(i, length(dn))
+  }
+  edge_t[[length(NEIGH_MATCH_COLS) + 1L]] <- unlist(cos_t, use.names = FALSE)
+  edge_g[[length(NEIGH_MATCH_COLS) + 1L]] <- unlist(cos_g, use.names = FALSE)
+  rm(cos_t, cos_g, adj_i, adj_off, sufix, pid_ix)
+  print(Sys.time())
+
+  # ---- union -> ascending -> dedup -> space join ---------------------------
+  eg <- unlist(edge_g, use.names = FALSE)
+  et <- unlist(edge_t, use.names = FALSE)
+  rm(edge_g, edge_t)
+  o  <- order(eg, et, method = "radix")
+  eg <- eg[o]; et <- et[o]; rm(o)
+  neighbors <- character(n_groups)          # groups with no neighbour stay ""
+  parts <- split(et, eg)
+  # et is already ascending inside each group, so unique() dedups adjacently and
+  # preserves the ascending order the original got from neighbors[order(...)].
+  neighbors[as.integer(names(parts))] <- vapply(parts,
+                                                function(z) paste0(unique(z),
+                                                                   collapse = " "),
+                                                character(1))
+  rm(parts, eg, et)
+
+  # ---- row order ----------------------------------------------------------
+  # Reproduce multidplyr's permutation: groups are dealt to FINAL_OUTPUT_WORKERS
+  # shards by greedy least-loaded-first (ties to the lowest worker index), then
+  # collect() concatenates the shards in worker order.
+  counts <- lengths(gd$.rows)
+  load   <- integer(FINAL_OUTPUT_WORKERS)
+  worker <- integer(n_groups)
+  for (i in seq_len(n_groups)) {
+    j <- which.min(load)
+    worker[[i]] <- j
+    load[[j]] <- load[[j]] + counts[[i]]
+  }
+  ord <- order(worker, seq_len(n_groups), method = "radix")
+
+  situs_neighbor_ind <- dplyr::group_by(
+    tibble::tibble(situs_pID     = gd$situs_pID[ord],
+                   situs_address = gd$situs_address[ord],
+                   situs_neighbors = neighbors[ord]),
+    situs_pID)
+
+  cat("situs_neighor_gen: cosine block matched",
+      n_hit_col, "groups to >=1 colname,", n_multi_col, "to more than one\n")
+  cat("situs_neighor_gen: groups with a non-uniform nchar >",
+      NEIGH_ADDR_MIN_CHARS, "verdict:",
+      paste(names(mixed_gate), mixed_gate, sep = "=", collapse = " "), "\n")
+  if (any(mixed_gate > 0L)) {
+    warning("situs_neighor_gen: the per-value address gate now differs from the ",
+            "original recycled gate on the groups counted above")
+  }
+  print(Sys.time())
+
   situs_neighbor_ind
-  
 }
+
 situs_neighor_gen_final = function(owner_data_used,
                                    situs_neighbor_ind){
 
