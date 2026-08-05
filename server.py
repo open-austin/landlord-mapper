@@ -1788,9 +1788,12 @@ def other_skin():
 # Austin DSA's own mark, from the chapter branding kit. The seal-with-text
 # version is deliberately not used anywhere: its arched AUSTIN/DSA stops being
 # legible below ~96px and nothing here renders it that big.
+# bat-rose.svg, the bare mark with no disc, is deliberately NOT here. It carries
+# a white knockout path, so on a near-white ground part of the mark disappears,
+# and the disc version reads on paper, on the red banner and on the dark theme
+# without a variant per surface.
 BRAND_FILES = {
     "bat-circle-red.svg": "image/svg+xml",
-    "bat-rose.svg": "image/svg+xml",
     "StyreneB-Regular.otf": "font/otf",
     "ManifoldDSA-Regular.woff2": "font/woff2",
 }
