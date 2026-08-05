@@ -125,3 +125,28 @@ memory-capped container, Railway included.
   proxy read timeouts if you front it with anything.
 - **Sleep-on-idle is viable** now that startup is instant. For bursty traffic
   that is the largest single saving available on a metered host.
+- **`/rankings` cold start was one full scan of the `owner` table, per request.**
+  With scale-to-zero on, the first request after idle measured 21.0 s. The
+  unfiltered `COUNT/SUM` behind the page's denominators carried no filter, so it
+  was a constant of the database being recomputed every time: 25,906 pages,
+  101.2 MB, off a cold volume. `/health` touches 27 pages, which is why the
+  healthcheck said 1.4 ms while the page said 21 s. It is now precomputed into
+  `meta` as `rank_totals_in_scope` and memoised per process. Measured on a
+  representative 1.10 GB database on a high-per-op-latency mount: seven rankings
+  views went 41.1 s to 0.078 s, and the cold page reads 83 pages instead of
+  25,980.
+
+### One-time step after deploying that change
+
+An existing volume was seeded before `build-db.py` wrote the key, so backfill it
+in place rather than re-uploading a gigabyte for 80 bytes:
+
+```
+railway ssh --service web
+python3 backfill-rank-totals.py /data/lm.sqlite3
+```
+
+Then restart the service so `STORE.load()` reads the new row. Skipping this is
+safe — `server.py` falls back to computing the same figures out of the three
+partial ranking indexes, which is ~half the cold I/O and still once per process
+instead of once per request — but the key is what makes the cold page instant.

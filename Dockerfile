@@ -22,7 +22,14 @@ WORKDIR /app
 # rebuild fails with ImportError without it. server.py imports only stdlib and
 # reads the typed schema through SQL expressions, so it does not need them --
 # they travel with build-db.py.
-COPY server.py build-db.py typed.py retype.py entrypoint.sh ./
+#
+# backfill-rank-totals.py must be listed here even though nothing imports it.
+# It is run by hand over `railway ssh` to write the meta.rank_totals key that
+# /rankings reads on its fast path, and this COPY is an explicit enumeration with
+# no wildcard: leaving it out does not fail the build, it fails the deploy step
+# with Errno 2, and /rankings then takes the 13,462-page fallback scan forever
+# with nothing logged to say which path is live.
+COPY server.py build-db.py typed.py retype.py backfill-rank-totals.py entrypoint.sh ./
 RUN chmod +x entrypoint.sh
 
 # The database lives on a Railway volume, NOT in the image. It is ~0.9-1.8 GB,
@@ -44,14 +51,21 @@ RUN chmod +x entrypoint.sh
 # requests -- same ~3-4 MB per request, same absence of a plateau. Arenas were
 # where the memory sat, not why it accumulated.
 #
-# The real mechanism is per-connection allocation churn, and the fix is the
-# connection pool in server.py: ThreadingMixIn spawns a thread per TCP
-# connection, and each one used to build and discard an 8 MB SQLite page cache,
-# fragmenting the heap in a way glibc never trims back. Pooling 8 long-lived
-# Sessions makes that cache a reused asset instead of per-connection garbage.
-# Measured locally over the same 143-route replay, one fresh TCP connection per
-# route: peak RSS 176.4 MB before, 53.5 MB after, with all 143 responses
-# byte-identical.
+# The real mechanism is per-connection allocation churn: ThreadingMixIn spawns a
+# thread per TCP connection, and each one built and discarded an 8 MB SQLite page
+# cache, fragmenting the heap in a way glibc never trims back.
+#
+# CAUTION for whoever reads this next: an earlier version of this comment credited
+# a connection pool of 8 long-lived Sessions. That pool is NOT what ships. It was
+# reverted in ac35848 because it violates sqlite3's same-thread rule -- it tested
+# clean locally and then broke every page in production. Do not reintroduce it
+# from this comment.
+#
+# What ships instead (d2f284b) is much smaller: each thread keeps its own
+# connection in a threading.local and the page cache is capped at 2 MB
+# (cache_size=-2000) rather than 8 MB, which measured 65% off peak memory. That
+# shrinks the per-request churn but does not prove it plateaus, so treat
+# unbounded growth over a very long-lived container as still open.
 #
 # The cap stays because a ceiling near 128 MB instead of 24 GB is still worth
 # having on a 48-visible-core host, and the malloc contention it costs is free

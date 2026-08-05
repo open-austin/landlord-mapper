@@ -621,6 +621,46 @@ def build_owners(cx, st):
         "SELECT COUNT(*) FROM owner WHERE in_scope = 1").fetchone()[0]
 
 
+# The four figures the unfiltered /rankings page states as its denominators, in
+# the order server.py's rank_owners_count() returns them.
+RANK_TOTALS_KEY = "rank_totals_in_scope"
+RANK_TOTALS_SQL = ("SELECT COUNT(*), SUM(n_parcels_scope), SUM(scope_units), "
+                   "SUM(scope_value) FROM owner WHERE in_scope = 1")
+
+
+def rank_totals(cx, st):
+    """Precompute the unfiltered ranking totals into `meta`.
+
+    The server used to run this aggregate on every /rankings request. It has no
+    filter in it, so it is a constant of the finished database, and computing it
+    at request time meant reading the whole 101 MB owner table off the volume --
+    the measured dominant term in a 21 s cold /rankings. It costs one scan here,
+    once, next to a dozen other scans this build already does.
+
+    Two of the four are computed independently elsewhere in this build, so they
+    are asserted rather than trusted: owners_in_scope from the same COUNT at line
+    620, and parcels_in_scope counted row by row while reading the CSV. They must
+    agree, because n_parcels_scope is SUM(in_scope) per owner and every parcel
+    belongs to exactly one owner. If they ever disagree, one of the two is wrong
+    and the ranking page would state a denominator that contradicts /health.
+    """
+    log("ranking totals")
+    t = cx.execute(RANK_TOTALS_SQL).fetchone()
+    tot = [int(x or 0) for x in t]
+    st[RANK_TOTALS_KEY] = tot
+    for name, mine in (("owners_in_scope", tot[0]),
+                       ("parcels_in_scope", tot[1])):
+        theirs = st.get(name)
+        if theirs is not None and int(theirs) != mine:
+            raise SystemExit(
+                "rank_totals: %s is %r counted directly but %r summed off the "
+                "owner table; the two ways of counting the same population "
+                "disagree and the rankings page would contradict /health"
+                % (name, theirs, mine))
+    log("  owners %s, in-scope parcels %s, units %s, value %s"
+        % tuple(format(x, ",d") for x in tot))
+
+
 def build_filings(cx, st, by_parcel):
     """Attach the franchise filing and officers to each owner.
 
@@ -776,6 +816,7 @@ def main():
         s = stmt.strip()
         if s and "ON parcel" not in s and "ON owner(" not in s:
             cx.execute(s)
+    rank_totals(cx, st)
     st["load_seconds"] = round(time.time() - t0, 1)
     st["built_at"] = time.time()
     st["data_dir"] = DATA
