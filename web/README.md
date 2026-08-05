@@ -1,7 +1,30 @@
 # landlord-mapper-web
 
-Railway deployment of the Austin landlord-mapper web tool. Personal dev
-environment.
+A second front end for the landlord-mapper pipeline: a stdlib-only Python server
+over a read-only SQLite build of the pipeline's output. Deployed on Railway.
+
+## Where this sits in the repository
+
+This directory used to be its own repository, and everything below was written
+from that point of view: paths are relative to **this directory**, not the repo
+root. That matters for one thing in particular.
+
+**The Docker build context is this directory, not the repository root.** The
+`COPY server.py …` lines resolve against the build context, so a build launched
+from the repo root cannot see `server.py` and fails. On Railway that means the
+service's **root directory must be set to `web`**; `railway.toml` and
+`Dockerfile` in here then work unchanged. Locally:
+
+```
+docker build -t landlord-mapper-web web/     # context = web/, correct
+docker build -t landlord-mapper-web -f web/Dockerfile .   # WRONG, COPY fails
+```
+
+The R pipeline has its own `Dockerfile` at the repo root and the two are
+unrelated: this one installs no R and the pipeline's installs no Python server.
+
+The database this reads is built by `build-db.py` from the pipeline's CSV output.
+It is not in git and not in the image; see "The one thing that is not in git".
 
 The app answers four questions an organizer actually walks in with: who owns my
 building, what else does that landlord own, who are the biggest landlords here,
