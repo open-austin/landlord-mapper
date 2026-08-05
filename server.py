@@ -1001,40 +1001,104 @@ def title_case(v):
 
 
 # ---------------------------------------------------------------------------
-# CSS, carried over from the approved design
+# CSS. The site ships in two skins and they share EVERY structural rule.
+#
+# A skin is a token block and nothing else: CSS_BASE below is the whole design
+# and never mentions a colour or a typeface literally, only var(--...). So a
+# skin cannot drift structurally from the other one, and adding a third would be
+# one more token block.
+#
+#   --survey  the accent as a MARK: fills, strokes, dimension runs, large type.
+#             Needs 3:1 (non-text / large-text), not 4.5:1.
+#   --link    the accent as SMALL TEXT: body links, sort arrows, hit highlights,
+#             and any fill that carries text on top of it. Needs 4.5:1. In the
+#             field skin the two are the same blue; in the DSA skin they are not,
+#             because brand red is 4.00:1 on brand paper and fails AA for text.
+#   --display chrome type: labels, headings, buttons, chips, graph node names.
+#   --mono    figures and raw compared strings, where column alignment and
+#             character-by-character comparison are the whole point. Stays a
+#             true monospace in BOTH skins -- Styrene B would misalign a
+#             ranking table, and brand conformance is not worth that.
 # ---------------------------------------------------------------------------
-CSS = r"""
+CSS_TOKENS_FIELD = r"""
 :root {
   --paper:#E9EBE0; --paper-2:#F3F4EC; --paper-3:#E1E4D8;
   --ink:#171E1B; --ink-2:#58625B; --rule:#A7B0A4;
-  --survey:#2E5FA3; --survey-w:#D6DFEE;
-  --ochre:#7D5F16; --oxide:#9E3226; --focus:#2E5FA3;
+  --survey:#2E5FA3; --survey-w:#D6DFEE; --link:#2E5FA3;
+  --ochre:#7D5F16; --oxide:#9E3226; --focus:#2E5FA3; --flag:#7D5F16;
   --mono: ui-monospace, "Cascadia Mono", "SF Mono", SFMono-Regular, Menlo,
           Consolas, "Liberation Mono", "Courier New", monospace;
   --serif: Charter, "Iowan Old Style", "Palatino Linotype", Palatino,
            Georgia, Cambria, "Times New Roman", serif;
+  --display: var(--mono);
   --gut: 30px; --wrap: 74rem; --col: 40rem;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --paper:#101310; --paper-2:#191E19; --paper-3:#151A15;
     --ink:#E2E7DE; --ink-2:#97A296; --rule:#333B33;
-    --survey:#86ADE8; --survey-w:#1C2A3B;
-    --ochre:#DCB25E; --oxide:#E58A78; --focus:#A8C6F0;
+    --survey:#86ADE8; --survey-w:#1C2A3B; --link:#86ADE8;
+    --ochre:#DCB25E; --oxide:#E58A78; --focus:#A8C6F0; --flag:#DCB25E;
   }
 }
 :root[data-theme="dark"] {
   --paper:#101310; --paper-2:#191E19; --paper-3:#151A15;
   --ink:#E2E7DE; --ink-2:#97A296; --rule:#333B33;
-  --survey:#86ADE8; --survey-w:#1C2A3B;
-  --ochre:#DCB25E; --oxide:#E58A78; --focus:#A8C6F0;
+  --survey:#86ADE8; --survey-w:#1C2A3B; --link:#86ADE8;
+  --ochre:#DCB25E; --oxide:#E58A78; --focus:#A8C6F0; --flag:#DCB25E;
 }
 :root[data-theme="light"] {
   --paper:#E9EBE0; --paper-2:#F3F4EC; --paper-3:#E1E4D8;
   --ink:#171E1B; --ink-2:#58625B; --rule:#A7B0A4;
-  --survey:#2E5FA3; --survey-w:#D6DFEE;
-  --ochre:#7D5F16; --oxide:#9E3226; --focus:#2E5FA3;
+  --survey:#2E5FA3; --survey-w:#D6DFEE; --link:#2E5FA3;
+  --ochre:#7D5F16; --oxide:#9E3226; --focus:#2E5FA3; --flag:#7D5F16;
 }
+"""
+
+# Austin DSA. Every value is either a brand colour verbatim or a documented,
+# hue-locked derivation of one -- see BRAND_NOTES below for the contrast
+# measurements that forced each derivation.
+CSS_TOKENS_DSA = r"""
+:root {
+  --paper:#f6f4f3; --paper-2:#ffffff; --paper-3:#ece8e7;
+  --ink:#231f20; --ink-2:#605c5c; --rule:#8c8989;
+  --survey:#ec1f27; --survey-w:#fbd2d4; --link:#c4151c;
+  --ochre:#6d5300; --oxide:#a00a10; --focus:#c4151c; --flag:#ffe45e;
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", SFMono-Regular, Menlo,
+          Consolas, "Liberation Mono", "Courier New", monospace;
+  /* Body prose is NOT Styrene. The brand names it --font-display and ships one
+     weight, Regular: no bold file, no italic. Running text needs both, and a
+     browser would have to synthesise them. So Styrene carries the display and
+     chrome, and prose gets a grotesque that has real weights -- which is also
+     what the Echo app does (display token vs the default sans). */
+  --serif: "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+  --display: "StyreneB", "ManifoldDSA", "Helvetica Neue", Helvetica, Arial,
+             system-ui, sans-serif;
+  --gut: 30px; --wrap: 74rem; --col: 40rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper:#191617; --paper-2:#231f20; --paper-3:#1e1a1b;
+    --ink:#f6f4f3; --ink-2:#a9a4a4; --rule:#494545;
+    --survey:#ec1f27; --survey-w:#3a1416; --link:#f5726f;
+    --ochre:#e8c34a; --oxide:#f5726f; --focus:#f5726f; --flag:#ffe45e;
+  }
+}
+:root[data-theme="dark"] {
+  --paper:#191617; --paper-2:#231f20; --paper-3:#1e1a1b;
+  --ink:#f6f4f3; --ink-2:#a9a4a4; --rule:#494545;
+  --survey:#ec1f27; --survey-w:#3a1416; --link:#f5726f;
+  --ochre:#e8c34a; --oxide:#f5726f; --focus:#f5726f; --flag:#ffe45e;
+}
+:root[data-theme="light"] {
+  --paper:#f6f4f3; --paper-2:#ffffff; --paper-3:#ece8e7;
+  --ink:#231f20; --ink-2:#605c5c; --rule:#8c8989;
+  --survey:#ec1f27; --survey-w:#fbd2d4; --link:#c4151c;
+  --ochre:#6d5300; --oxide:#a00a10; --focus:#c4151c; --flag:#ffe45e;
+}
+"""
+
+CSS_BASE = r"""
 @media (min-width: 46rem) { :root { --gut: 56px; } }
 
 html { -webkit-text-size-adjust: 100%; }
@@ -1047,12 +1111,12 @@ body {
 }
 *, *::before, *::after { box-sizing: border-box; }
 img, svg, table { max-width: 100%; }
-a { color: var(--survey); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2px; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 
 .m { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .eyebrow {
-  font-family: var(--mono); font-size: 0.6875rem; letter-spacing: 0.13em;
+  font-family: var(--display); font-size: 0.6875rem; letter-spacing: 0.13em;
   text-transform: uppercase; color: var(--ink-2); line-height: 1.4;
 }
 .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
@@ -1067,22 +1131,22 @@ a { color: var(--survey); text-decoration-thickness: 1px; text-underline-offset:
   gap: 1rem; border-bottom: 2px solid var(--ink); padding-bottom: 0.7rem;
 }
 .orgmark {
-  font-family: var(--mono); font-size: 0.6875rem; letter-spacing: 0.2em;
+  font-family: var(--display); font-size: 0.6875rem; letter-spacing: 0.2em;
   text-transform: uppercase; color: var(--ink);
 }
 .orgmark a { color: var(--ink); text-decoration: none; }
-.orgmark a:hover { color: var(--survey); }
+.orgmark a:hover { color: var(--link); }
 .orgmark b { font-weight: 700; }
 .orgmark span { color: var(--ink-2); }
 .themebtn {
-  font-family: var(--mono); font-size: 0.6875rem; letter-spacing: 0.12em;
+  font-family: var(--display); font-size: 0.6875rem; letter-spacing: 0.12em;
   text-transform: uppercase; background: transparent; color: var(--ink-2);
   border: 1px solid var(--rule); padding: 0.4rem 0.7rem; cursor: pointer;
 }
 .themebtn:hover { color: var(--ink); border-color: var(--ink); }
 
 h1 {
-  font-family: var(--mono); font-weight: 700; text-transform: uppercase;
+  font-family: var(--display); font-weight: 700; text-transform: uppercase;
   font-size: clamp(2.05rem, 8.4vw, 4.4rem); line-height: 0.94;
   letter-spacing: -0.035em; text-wrap: balance;
   margin-block: clamp(1.6rem, 5vw, 2.6rem) 0; max-width: 22ch;
@@ -1091,7 +1155,7 @@ h1 em { font-style: normal; color: var(--survey); }
 .deck { max-width: 42rem; margin-top: 1.1rem; font-size: 1.06em; }
 
 .stamp {
-  font-family: var(--mono); font-size: 0.6875rem; letter-spacing: 0.11em;
+  font-family: var(--display); font-size: 0.6875rem; letter-spacing: 0.11em;
   text-transform: uppercase; line-height: 1.5; color: var(--ochre);
   border: 2px solid var(--ochre); outline: 1px solid var(--ochre);
   outline-offset: 3px; padding: 0.6rem 0.85rem; max-width: 36rem; margin-top: 2rem;
@@ -1113,7 +1177,7 @@ h1 em { font-style: normal; color: var(--survey); }
   padding: clamp(1.1rem, 4vw, 1.8rem); max-width: 46rem;
 }
 .lookup label {
-  display: block; font-family: var(--mono); font-size: 0.6875rem;
+  display: block; font-family: var(--display); font-size: 0.6875rem;
   letter-spacing: 0.13em; text-transform: uppercase; color: var(--ink-2);
   margin-bottom: 0.55rem;
 }
@@ -1125,14 +1189,14 @@ h1 em { font-style: normal; color: var(--survey); }
 }
 .field input::placeholder { color: var(--ink-2); text-transform: uppercase; }
 .btn {
-  font-family: var(--mono); font-size: 0.8125rem; letter-spacing: 0.1em;
+  font-family: var(--display); font-size: 0.8125rem; letter-spacing: 0.1em;
   text-transform: uppercase; font-weight: 700; background: var(--ink);
   color: var(--paper); border: 2px solid var(--ink); padding: 0.7rem 1.1rem;
   cursor: pointer;
 }
 .btn:hover { background: var(--survey); border-color: var(--survey); color: var(--paper); }
 .btn-quiet { background: transparent; color: var(--ink); border: 1px solid var(--rule); font-weight: 400; }
-.btn-quiet:hover { background: transparent; color: var(--survey); border-color: var(--survey); }
+.btn-quiet:hover { background: transparent; color: var(--link); border-color: var(--survey); }
 .btn-off { opacity: 0.4; pointer-events: none; }
 .scopenote { margin-top: 1rem; max-width: 44rem; font-size: 0.95em; color: var(--ink-2); }
 
@@ -1182,7 +1246,7 @@ h1 em { font-style: normal; color: var(--survey); }
 @media (min-width: 34rem) { .dl--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .dl > div { min-width: 0; }
 .dl dt {
-  font-family: var(--mono); font-size: 0.625rem; letter-spacing: 0.13em;
+  font-family: var(--display); font-size: 0.625rem; letter-spacing: 0.13em;
   text-transform: uppercase; color: var(--ink-2);
 }
 .dl dd {
@@ -1209,18 +1273,18 @@ h1 em { font-style: normal; color: var(--survey); }
 @media (min-width: 38rem) { .matchcheck { grid-template-columns: 1fr 1fr; } }
 .matchcheck > div { background: var(--paper-2); padding: 0.7rem 0.8rem; }
 .matchcheck .hd {
-  font-family: var(--mono); font-size: 0.625rem; letter-spacing: 0.13em;
+  font-family: var(--display); font-size: 0.625rem; letter-spacing: 0.13em;
   text-transform: uppercase; color: var(--ink-2); display: block; margin-bottom: 0.3rem;
 }
 .matchcheck .val { font-family: var(--mono); font-size: 0.875rem; word-break: break-word; }
-.matchcheck .val.hit { color: var(--survey); font-weight: 700; }
+.matchcheck .val.hit { color: var(--link); font-weight: 700; }
 
 .chip {
-  display: inline-flex; align-items: center; gap: 0.4rem; font-family: var(--mono);
+  display: inline-flex; align-items: center; gap: 0.4rem; font-family: var(--display);
   font-size: 0.625rem; letter-spacing: 0.13em; text-transform: uppercase;
   padding: 0.22rem 0.5rem; white-space: nowrap;
 }
-.chip--matched { background: var(--survey); color: var(--paper); border: 1px solid var(--survey); }
+.chip--matched { background: var(--link); color: var(--paper); border: 1px solid var(--survey); }
 .chip--norec {
   background: transparent; color: var(--ink); border: 1px solid var(--ink);
   box-shadow: 0 0 0 2px var(--paper), 0 0 0 3px var(--ink); margin-right: 3px;
@@ -1242,12 +1306,12 @@ h1 em { font-style: normal; color: var(--survey); }
   line-height: 1; letter-spacing: -0.03em; color: var(--ink);
 }
 .fig .k {
-  display: block; font-family: var(--mono); font-size: 0.625rem; letter-spacing: 0.15em;
+  display: block; font-family: var(--display); font-size: 0.625rem; letter-spacing: 0.15em;
   text-transform: uppercase; color: var(--ink-2); margin-top: 0.4rem;
 }
 .fig .k .approx { color: var(--ochre); }
 .payload .who {
-  font-family: var(--mono); font-size: 0.9375rem; font-weight: 700;
+  font-family: var(--display); font-size: 0.9375rem; font-weight: 700;
   word-break: break-word; margin-bottom: 0.9rem; display: block;
 }
 
@@ -1265,7 +1329,7 @@ h1 em { font-style: normal; color: var(--survey); }
 .ending .glyph { position: relative; height: 100%; min-height: 74px; }
 .ending .body { min-width: 0; display: flex; flex-direction: column; gap: 0.55rem; }
 .ending h3 {
-  font-family: var(--mono); font-size: 0.75rem; letter-spacing: 0.13em;
+  font-family: var(--display); font-size: 0.75rem; letter-spacing: 0.13em;
   text-transform: uppercase; margin: 0;
 }
 .ending p { margin: 0; font-size: 0.95em; }
@@ -1306,13 +1370,13 @@ h1 em { font-style: normal; color: var(--survey); }
   margin-top: 1.8rem; border: 1px solid var(--rule); border-left: 3px solid var(--ochre);
   background: var(--paper-2); padding: clamp(0.9rem, 3vw, 1.3rem); max-width: 40rem;
 }
-.empty h3 { font-family: var(--mono); font-size: 0.8125rem; letter-spacing: 0.06em; margin: 0 0 0.5rem; }
+.empty h3 { font-family: var(--display); font-size: 0.8125rem; letter-spacing: 0.06em; margin: 0 0 0.5rem; }
 .empty p { margin: 0 0 0.6rem; font-size: 0.95em; }
 .empty p:last-child { margin-bottom: 0; }
 
 .profhead { display: flex; flex-direction: column; gap: 0.9rem; align-items: flex-start; }
 .profhead h2 {
-  font-family: var(--mono); font-weight: 700; text-transform: uppercase;
+  font-family: var(--display); font-weight: 700; text-transform: uppercase;
   font-size: clamp(1.35rem, 5.2vw, 2.5rem); line-height: 1.02;
   letter-spacing: -0.03em; margin: 0; word-break: break-word;
 }
@@ -1331,13 +1395,13 @@ h1 em { font-style: normal; color: var(--survey); }
   line-height: 1; letter-spacing: -0.03em;
 }
 .headfigs .k {
-  display: block; font-family: var(--mono); font-size: 0.625rem; letter-spacing: 0.14em;
+  display: block; font-family: var(--display); font-size: 0.625rem; letter-spacing: 0.14em;
   text-transform: uppercase; color: var(--ink-2); margin-top: 0.45rem;
 }
 .headfigs .k .approx { color: var(--ochre); }
 
 .subhead {
-  font-family: var(--mono); font-size: 0.75rem; letter-spacing: 0.16em;
+  font-family: var(--display); font-size: 0.75rem; letter-spacing: 0.16em;
   text-transform: uppercase; color: var(--ink); border-bottom: 2px solid var(--ink);
   padding-bottom: 0.4rem; margin: clamp(2rem, 6vw, 3rem) 0 0;
 }
@@ -1364,12 +1428,12 @@ tfoot td {
   border: 1px solid var(--rule); padding: 0.1rem 0.35rem; color: var(--ink-2);
 }
 .tblnote {
-  font-family: var(--mono); font-size: 0.625rem; letter-spacing: 0.08em;
+  font-family: var(--display); font-size: 0.625rem; letter-spacing: 0.08em;
   text-transform: uppercase; color: var(--ink-2); margin-top: 0.6rem;
 }
 .pager {
   display: flex; flex-wrap: wrap; align-items: center; gap: 0.7rem; margin-top: 1rem;
-  font-family: var(--mono); font-size: 0.6875rem; letter-spacing: 0.1em;
+  font-family: var(--display); font-size: 0.6875rem; letter-spacing: 0.1em;
   text-transform: uppercase; color: var(--ink-2);
 }
 .pager a { text-decoration: none; }
@@ -1379,15 +1443,15 @@ tfoot td {
 .netscroll svg { min-width: 62rem; width: 100%; height: auto; display: block; }
 .n-box { fill: var(--paper); stroke: var(--rule); stroke-width: 1; }
 .n-box--focus { fill: var(--survey-w); stroke: var(--survey); stroke-width: 2; }
-.n-name { fill: var(--ink); font-family: var(--mono); font-size: 12.5px; font-weight: 700; letter-spacing: 0.01em; }
-.n-state { fill: var(--ink-2); font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.11em; }
+.n-name { fill: var(--ink); font-family: var(--display); font-size: 12.5px; font-weight: 700; letter-spacing: 0.01em; }
+.n-state { fill: var(--ink-2); font-family: var(--display); font-size: 9.5px; letter-spacing: 0.11em; }
 .n-link { text-decoration: none; }
 .e-line { stroke: var(--ink-2); stroke-width: 1.6; fill: none; }
 .e-line--officer { stroke: var(--survey); stroke-width: 2.2; }
 .e-line--agent { stroke: var(--ink-2); stroke-width: 1.4; stroke-dasharray: 8 5; stroke-opacity: 0.6; }
 .e-line--mail { stroke: var(--ink-2); stroke-width: 1.8; stroke-dasharray: 2 4.5; }
 .e-knock { fill: var(--paper-2); }
-.e-label { fill: var(--ink); font-family: var(--mono); font-size: 10px; letter-spacing: 0.09em; }
+.e-label { fill: var(--ink); font-family: var(--display); font-size: 10px; letter-spacing: 0.09em; }
 .e-label--weak { fill: var(--ink-2); }
 .sw-fill { fill: var(--survey); }
 .sw-ink { fill: var(--ink); }
@@ -1398,7 +1462,7 @@ tfoot td {
 }
 @media (min-width: 44rem) { .edgekey { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .edgekey .k { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; }
-.edgekey .k .t { font-family: var(--mono); font-size: 0.6875rem; letter-spacing: 0.11em; text-transform: uppercase; }
+.edgekey .k .t { font-family: var(--display); font-size: 0.6875rem; letter-spacing: 0.11em; text-transform: uppercase; }
 .edgekey .k p { margin: 0; font-size: 0.9em; color: var(--ink-2); }
 .edgekey svg { display: block; height: 10px; width: 78px; min-width: 0; }
 .netnote { padding: 0 clamp(0.9rem, 3vw, 1.3rem) clamp(0.9rem, 3vw, 1.3rem); }
@@ -1408,7 +1472,7 @@ tfoot td {
 .footgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2rem; }
 @media (min-width: 48rem) { .footgrid { grid-template-columns: 1.1fr 1fr; } }
 .footgrid h3 {
-  font-family: var(--mono); font-size: 0.6875rem; letter-spacing: 0.16em;
+  font-family: var(--display); font-size: 0.6875rem; letter-spacing: 0.16em;
   text-transform: uppercase; color: var(--ink-2); margin: 0 0 0.7rem;
 }
 .footgrid p { margin: 0 0 0.7rem; font-size: 0.95em; max-width: 34rem; }
@@ -1434,11 +1498,11 @@ tfoot td {
    the state, the mono/serif split and the paper palette are unchanged. */
 .navmark { display: flex; flex-wrap: wrap; gap: 0.2rem 1.05rem; }
 .navmark a {
-  font-family: var(--mono); font-size: 0.6875rem; letter-spacing: 0.12em;
+  font-family: var(--display); font-size: 0.6875rem; letter-spacing: 0.12em;
   text-transform: uppercase; color: var(--ink-2); text-decoration: none;
   padding-bottom: 2px; border-bottom: 2px solid transparent;
 }
-.navmark a:hover { color: var(--survey); }
+.navmark a:hover { color: var(--link); }
 .navmark a[aria-current="page"] { color: var(--ink); border-bottom-color: var(--survey); }
 
 .facets {
@@ -1451,7 +1515,7 @@ tfoot td {
 .facets .fset { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; }
 .facets .fset--wide { grid-column: 1 / -1; }
 .facets label, .facets .flab {
-  font-family: var(--mono); font-size: 0.625rem; letter-spacing: 0.13em;
+  font-family: var(--display); font-size: 0.625rem; letter-spacing: 0.13em;
   text-transform: uppercase; color: var(--ink-2);
 }
 .facets input, .facets select {
@@ -1478,8 +1542,8 @@ tfoot td {
 }
 .countline span { font-size: 0.8125rem; color: var(--ink-2); max-width: 44rem; }
 thead th a { color: var(--ink-2); text-decoration: none; white-space: nowrap; }
-thead th a:hover { color: var(--survey); }
-thead th .sortmark { color: var(--survey); font-weight: 700; }
+thead th a:hover { color: var(--link); }
+thead th .sortmark { color: var(--link); font-weight: 700; }
 td .rk {
   font-weight: 700; color: var(--ink-2); font-variant-numeric: tabular-nums;
 }
@@ -1497,7 +1561,7 @@ td .rk {
   font-variant-numeric: tabular-nums;
 }
 .statebar .k {
-  display: block; font-family: var(--mono); font-size: 0.625rem;
+  display: block; font-family: var(--display); font-size: 0.625rem;
   letter-spacing: 0.13em; text-transform: uppercase; color: var(--ink-2);
   margin-top: 0.45rem;
 }
@@ -1514,27 +1578,134 @@ td .rk {
   display: flex; flex-direction: column; gap: 0.6rem; min-width: 0;
 }
 .job .ix {
-  font-family: var(--mono); font-size: 0.625rem; letter-spacing: 0.18em;
+  font-family: var(--display); font-size: 0.625rem; letter-spacing: 0.18em;
   color: var(--ink-2); border-bottom: 1px solid var(--rule);
   padding-bottom: 0.45rem; font-variant-numeric: tabular-nums;
 }
 .job h3 {
-  font-family: var(--mono); font-size: 0.8125rem; letter-spacing: 0.03em;
+  font-family: var(--display); font-size: 0.8125rem; letter-spacing: 0.03em;
   text-transform: uppercase; line-height: 1.35; margin: 0;
 }
 .job p { margin: 0; font-size: 0.93em; flex: 1 1 auto; }
 .job a.go {
-  font-family: var(--mono); font-size: 0.6875rem; letter-spacing: 0.11em;
+  font-family: var(--display); font-size: 0.6875rem; letter-spacing: 0.11em;
   text-transform: uppercase; text-decoration: none; align-self: flex-start;
   border-bottom: 2px solid var(--survey); padding-bottom: 2px;
 }
 .job a.go:hover { color: var(--ink); border-bottom-color: var(--ink); }
+.skinswitch {
+  margin: 1.1rem 0 0; padding-top: 0.8rem; border-top: 1px dotted var(--rule);
+  font-family: var(--display); font-size: 0.625rem; letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
 .skiplink { position: absolute; left: -9999px; }
 .skiplink:focus {
   left: 1rem; top: 1rem; z-index: 5; background: var(--ink); color: var(--paper);
-  padding: 0.5rem 0.8rem; font-family: var(--mono); font-size: 0.75rem;
+  padding: 0.5rem 0.8rem; font-family: var(--display); font-size: 0.75rem;
 }
 """
+
+# Served from /brand/, cached immutable. font-display:swap so the page paints in
+# the fallback grotesque immediately rather than blocking on 134 KB of Styrene --
+# the fallback stack is metrically close enough that the swap is not a jolt.
+# Styrene B stays an .otf because converting it to woff2 needs brotli, which is
+# not in the stdlib and this image installs nothing.
+CSS_DSA_FONTS = r"""
+@font-face {
+  font-family: "ManifoldDSA"; font-style: normal; font-weight: 400;
+  font-display: swap;
+  src: url("/brand/ManifoldDSA-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "StyreneB"; font-style: normal; font-weight: 400;
+  font-display: swap;
+  src: url("/brand/StyreneB-Regular.otf") format("opentype");
+}
+"""
+
+# What the DSA skin adds on top of the shared structure. Three things only: the
+# chapter mark in the masthead, one red banner strip, and the handful of places
+# where a face designed for display needs different metrics than a monospace.
+CSS_DSA_EXTRA = r"""
+/* Styrene B is a grotesque, not a typewriter face: at the same nominal size it
+   sets wider and reads larger than the mono it replaces. These claw back the
+   tracking that was tuned for monospace so the labels do not sprawl. */
+.eyebrow, .dl dt, .matchcheck .hd, .fig .k, .headfigs .k, .statebar .k,
+.tblnote, .edgekey .k .t, .footgrid h3, .job .ix { letter-spacing: 0.1em; }
+.btn, .chip, .navmark a, .job h3, .job a.go { letter-spacing: 0.07em; }
+body { font-size: clamp(0.98rem, 0.94rem + 0.2vw, 1.05rem); line-height: 1.58; }
+
+/* Only StyreneB-Regular exists, so every font-weight:700 on a --display rule
+   would be SYNTHESISED bold: the browser smears the Regular outline sideways,
+   and on a face with this much character it reads as a rendering fault. These
+   are the display rules that asked for 700; uppercase and tracking carry the
+   emphasis instead. Rules that set 700 on --mono are left alone -- the
+   monospace stack has a real bold, and the figures should keep it. */
+h1, .profhead h2 { letter-spacing: -0.02em; font-weight: 400; }
+.btn, .payload .who, .orgmark b { font-weight: 400; }
+
+/* The mark. bat-circle-red carries its own red disc, so it reads on paper, on
+   the red banner and on the dark ground without a variant per surface -- which
+   is exactly the case the branding guide points it at. */
+.orgmark { display: flex; align-items: center; gap: 0.6rem; }
+.orgmark a { display: flex; align-items: center; gap: 0.6rem; }
+.orgmark .wm { color: var(--ink); }
+.batmark { width: 34px; height: 34px; flex: none; display: block; }
+
+/* The signature: a full-bleed DSA-red banner under the topline, wordmark
+   knocked out in white. This is bat-banner-left-red.svg rebuilt as live CSS so
+   it reflows on a phone instead of scaling a fixed raster. */
+.brandband { background: var(--survey); margin-top: 0.9rem; }
+.brandband .wrap {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.1rem;
+  padding-block: 0.55rem;
+}
+/* Literal #ffffff, not var(--paper): the banner is DSA red in BOTH themes,
+   because the brand red does not have a dark-mode variant and inventing one
+   would be the one thing the guide forbids. So the knockout has to be pinned to
+   white -- --paper would follow the theme and turn near-black on red. */
+.brandband p {
+  margin: 0; color: #ffffff; font-family: var(--display);
+  font-size: 0.6875rem; letter-spacing: 0.16em; text-transform: uppercase;
+}
+.brandband p.thin { color: #ffffff; opacity: 0.82; letter-spacing: 0.1em; }
+
+/* The "we could not look this up" chip is the one place the brand's yellow
+   earns its keep: as a FILL it takes rich-black text at 12.8:1, where the same
+   yellow as ink would be 1.16:1 on paper and unreadable. */
+.chip--unknown {
+  background: var(--flag); color: #231f20; border: 1px solid var(--ink);
+  border-style: dashed;
+}
+"""
+
+CSS_FIELD = CSS_TOKENS_FIELD + CSS_BASE
+CSS_DSA = CSS_DSA_FONTS + CSS_TOKENS_DSA + CSS_BASE + CSS_DSA_EXTRA
+
+# Why each DSA token is the value it is. Contrast ratios are computed, not
+# eyeballed: WCAG 2.1 relative luminance, AA needs 4.5:1 for text under 18.66px
+# bold / 24px, and 3:1 for large text and non-text UI.
+#
+#   --survey  #ec1f27  DSA Red, verbatim. 4.00:1 on --paper: fine as a mark,
+#                      fails as small text, hence --link.
+#   --link    #c4151c  brand --color-primary-dark, verbatim. 5.52:1 on --paper.
+#                      Echo uses this same pair the same way for links.
+#   --ink     #231f20  Rich Black, verbatim. 14.87:1.
+#   --paper   #f6f4f3  brand --color-paper, verbatim.
+#   --ink-2   #605c5c  brand --color-secondary, verbatim. 6.02:1.
+#   --rule    #8c8989  brand --color-gray-med, verbatim. 3.16:1, non-text only.
+#   --oxide   #a00a10  brand --color-danger, verbatim. 7.52:1.
+#   --survey-w #fbd2d4 brand --color-info, verbatim (the pale red wash).
+#   --flag    #ffe45e  brand --color-warning, verbatim, used only as a FILL.
+#   --ochre   #6d5300  DERIVED: #ffe45e darkened at locked hue until it passes
+#                      as ink (6.63:1). The brand has no mid-tone caution ink
+#                      and the dashed "unknown" strokes need one at 3:1+.
+#   dark --link #f5726f  DERIVED: #ec1f27 lightened at locked hue; brand red is
+#                      4.10:1 on the dark ground, this is 6.43:1.
+#   dark --ochre #e8c34a DERIVED the same way from #ffe45e, 10.56:1.
+#   dark --paper #191617 DERIVED: Rich Black darkened, so --paper-2 can BE
+#                      #231f20 (a real brand surface) and still sit above it.
+BRAND_NOTES = None
 
 THEME_JS = r"""
 (function () {
@@ -1573,14 +1744,74 @@ THEME_JS = r"""
 # ---------------------------------------------------------------------------
 # shared page furniture
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# skins
+#
+# Two skins, one process, one database. A second Railway service was the obvious
+# reading of "a second version of the site", and it is the wrong one here: the
+# service is only a front end over a 1.7 GB read-only volume, so a second copy
+# would mean seeding that volume again for a change that is entirely
+# presentational. One service serving both also makes them comparable -- the same
+# URL, the same row, two skins, no "is that difference real or is it stale data".
+#
+# The skin is per REQUEST, and page functions do not take it as an argument:
+# shell() and topline() are the only two that care, they are called from ~30 page
+# functions, and threading a parameter through all of them to reach two
+# call sites would be worse than a thread-local. The server is
+# ThreadingMixIn/thread-per-request, so a threading.local IS the request scope.
+SKIN_FIELD = "field"
+SKIN_DSA = "dsa"
+SKINS = (SKIN_FIELD, SKIN_DSA)
+SKIN_COOKIE = "lm-skin"
+DEFAULT_SKIN = os.environ.get("LM_SKIN", SKIN_FIELD)
+if DEFAULT_SKIN not in SKINS:
+    DEFAULT_SKIN = SKIN_FIELD
+
+_CURRENT = threading.local()
+
+
+def skin():
+    """The skin for the request being served. Defaults rather than raising: a
+    500 renders through page_error() -> shell() on a thread that may never have
+    been through route()."""
+    return getattr(_CURRENT, "skin", DEFAULT_SKIN)
+
+
+def set_skin(name):
+    _CURRENT.skin = name if name in SKINS else DEFAULT_SKIN
+
+
+def other_skin():
+    return SKIN_FIELD if skin() == SKIN_DSA else SKIN_DSA
+
+
+# Austin DSA's own mark, from the chapter branding kit. The seal-with-text
+# version is deliberately not used anywhere: its arched AUSTIN/DSA stops being
+# legible below ~96px and nothing here renders it that big.
+BRAND_FILES = {
+    "bat-circle-red.svg": "image/svg+xml",
+    "bat-rose.svg": "image/svg+xml",
+    "StyreneB-Regular.otf": "font/otf",
+    "ManifoldDSA-Regular.woff2": "font/woff2",
+}
+BRAND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "brand")
+
+DSA_HEAD = (
+    "<link rel=\"icon\" href=\"/brand/bat-circle-red.svg\" type=\"image/svg+xml\">"
+    "<meta name=\"theme-color\" content=\"#ec1f27\">"
+)
+
+
 def shell(title, body, skip="#main"):
+    dsa = skin() == SKIN_DSA
     return (
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-        "<title>%s</title><style>%s</style></head><body>"
+        "<title>%s</title>%s<style>%s</style></head><body>"
         "<a class=\"skiplink\" href=\"%s\">Skip to the record</a>"
         "%s<script>%s</script></body></html>"
-        % (e(title), CSS, e(skip), body, THEME_JS)
+        % (e(title), DSA_HEAD if dsa else "",
+           CSS_DSA if dsa else CSS_FIELD, e(skip), body, THEME_JS)
     )
 
 
@@ -1596,12 +1827,59 @@ def topline(current=""):
         "<a href=\"%s\"%s>%s</a>"
         % (h, " aria-current=\"page\"" if h == current else "", e(t))
         for h, t in NAV)
+    dsa = skin() == SKIN_DSA
+    if dsa:
+        # The mark is decorative here: the adjacent text already names the
+        # chapter, so alt="" keeps a screen reader from reading it twice.
+        org = ("<div class=\"orgmark\"><a href=\"/\">"
+               "<img class=\"batmark\" src=\"/brand/bat-circle-red.svg\" alt=\"\" "
+               "width=\"34\" height=\"34\">"
+               # .wm, not a bare span: the base rule `.orgmark span` paints
+               # spans in --ink-2 to mute the "/ OPEN AUSTIN" half, and an
+               # unclassed wrapper would inherit that down over the whole
+               # wordmark. .wm puts --ink back.
+               "<span class=\"wm\"><b>LANDLORD MAPPER</b> <span>/ AUSTIN DSA</span></span>"
+               "</a></div>")
+    else:
+        org = ("<div class=\"orgmark\"><a href=\"/\"><b>LANDLORD MAPPER</b> "
+               "<span>/ OPEN AUSTIN</span></a></div>")
     return (
-        "<div class=\"topline\">"
-        "<div class=\"orgmark\"><a href=\"/\"><b>LANDLORD MAPPER</b> <span>/ OPEN AUSTIN</span></a></div>"
+        "<div class=\"topline\">%s"
         "<nav class=\"navmark\" aria-label=\"Sections\">%s</nav>"
         "<button class=\"themebtn\" id=\"themebtn\" type=\"button\" aria-pressed=\"false\">Dark mode</button>"
-        "</div>" % nav
+        "</div>%s" % (org, nav, brandband() if dsa else "")
+    )
+
+
+def brandband():
+    """The red strip under the masthead. It says who publishes this, which is the
+    one thing the field skin's markless header never did."""
+    return (
+        "<div class=\"brandband\"><div class=\"wrap\">"
+        "<p>Austin DSA &middot; Housing Justice</p>"
+        "<p class=\"thin\">Public records, put back in tenants' hands</p>"
+        "</div></div>"
+    )
+
+
+def skinswitch():
+    """Lives in the footer, not the masthead: it is a thing you do once, not a
+    section of the site.
+
+    Rebuilds the CURRENT url with skin= replaced rather than linking to
+    "?skin=x", which would silently drop the filters on /explore and /rankings --
+    the two pages where someone is most likely to be comparing the two skins."""
+    to = other_skin()
+    label = "Austin DSA styling" if to == SKIN_DSA else "Field-report styling"
+    u = urllib.parse.urlsplit(getattr(_CURRENT, "url", "/") or "/")
+    q = [(k, v) for k, v in urllib.parse.parse_qsl(u.query, keep_blank_values=True)
+         if k != "skin"]
+    q.append(("skin", to))
+    href = urllib.parse.urlunsplit(("", "", u.path or "/",
+                                    urllib.parse.urlencode(q), ""))
+    return (
+        "<p class=\"skinswitch\"><a href=\"%s\" rel=\"nofollow\">Switch to %s</a></p>"
+        % (e(href), e(label))
     )
 
 
@@ -1760,6 +2038,9 @@ def footer():
         "</ul>"
         "<p style=\"margin-top:1rem\"><a href=\"/method\">Where every number comes from"
         "</a> &middot; <a href=\"/health\">Full load report</a></p>"
+        # NOT string-concatenated in: a url-encoded href carries %XX escapes and
+        # would be eaten by the % formatting below. It goes through as an arg.
+        "%s"
         "</div></div></footer>"
         % (num(st.get("scrape_rows_no_parcel", 0)),
            num(st.get("scrape_rows_addr_clash", 0)),
@@ -1774,7 +2055,8 @@ def footer():
            num(st.get("owners_in_scope", 0)),
            num(states.get(NO_RECORD, 0)), pct(states.get(NO_RECORD, 0), scoped),
            num(states.get(NOT_LOOKED_UP, 0) + states.get(NOT_RESOLVED, 0)),
-           pct(states.get(NOT_LOOKED_UP, 0) + states.get(NOT_RESOLVED, 0), scoped))
+           pct(states.get(NOT_LOOKED_UP, 0) + states.get(NOT_RESOLVED, 0), scoped),
+           skinswitch())
     )
 
 
@@ -4020,8 +4302,16 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "landlord-mapper-ui/1.0"
     protocol_version = "HTTP/1.1"
 
+    # Set per request by pick_skin() when ?skin= asked for a change. A class
+    # default because a 500 can reach send_html() without routing.
+    skin_cookie = None
+
     def log_message(self, fmt, *args):
         sys.stderr.write("%s %s\n" % (self.log_date_time_string(), fmt % args))
+
+    def send_skin_cookie(self):
+        if self.skin_cookie:
+            self.send_header("Set-Cookie", self.skin_cookie)
 
     def send_html(self, html_text, code=200):
         payload = html_text.encode("utf-8")
@@ -4029,6 +4319,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", "no-store")
+        self.send_skin_cookie()
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(payload)
@@ -4037,6 +4328,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(303)
         self.send_header("Location", to)
         self.send_header("Content-Length", "0")
+        self.send_skin_cookie()
         self.end_headers()
 
     def do_HEAD(self):
@@ -4117,11 +4409,66 @@ class Handler(BaseHTTPRequestHandler):
         except BrokenPipeError:
             pass
 
+    def cookie_skin(self):
+        """The skin the browser last chose. Parsed by hand rather than with
+        http.cookies because one name is wanted out of a header that a proxy or
+        an analytics script may have filled with anything, and SimpleCookie
+        silently drops the WHOLE header when any single morsel is malformed."""
+        raw = self.headers.get("Cookie") or ""
+        for part in raw.split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == SKIN_COOKIE and v in SKINS:
+                return v
+        return None
+
+    def pick_skin(self, qs):
+        """?skin= wins over the cookie, so a link can carry the skin to someone
+        who has never chosen one. Returns the Set-Cookie value when the choice
+        needs persisting, so a switch survives the next click."""
+        want = (qs.get("skin", [""])[0] or "").strip().lower()
+        if want in SKINS:
+            set_skin(want)
+            # Lax, not None: this is a display preference, it never needs to
+            # travel on a cross-site request, and it holds nothing about anyone.
+            return ("%s=%s; Path=/; Max-Age=31536000; SameSite=Lax"
+                    % (SKIN_COOKIE, want))
+        set_skin(self.cookie_skin() or DEFAULT_SKIN)
+        return None
+
+    def send_brand(self, name):
+        """The chapter's logo files and the two brand faces. Immutable because
+        the filenames are the branding kit's own and their contents do not change
+        without a new name; without it every page paints Styrene twice."""
+        ctype = BRAND_FILES.get(name)
+        if ctype is None:
+            return self.send_html(page_404("file", name), 404)
+        try:
+            with open(os.path.join(BRAND_DIR, name), "rb") as fh:
+                blob = fh.read()
+        except OSError:
+            # The skin is still usable without its fonts -- they degrade to the
+            # fallback grotesque -- so this is a 404, not a 500.
+            return self.send_html(page_404("file", name), 404)
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(blob)))
+        self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(blob)
+
     def route(self):
         u = urllib.parse.urlsplit(self.path)
         path = urllib.parse.unquote(u.path)
         qs = urllib.parse.parse_qs(u.query)
 
+        # Before any page is built: shell(), topline() and skinswitch() read the
+        # skin and the url off the thread, not off an argument.
+        _CURRENT.url = self.path
+        self.skin_cookie = self.pick_skin(qs)
+
+        if path.startswith("/brand/"):
+            return self.send_brand(path[len("/brand/"):].strip("/"))
         if path in ("/", "/index.html"):
             return self.send_html(page_home())
         if path in ("/health", "/healthz", "/health.html"):

@@ -32,6 +32,12 @@ WORKDIR /app
 COPY server.py build-db.py typed.py retype.py backfill-rank-totals.py entrypoint.sh ./
 RUN chmod +x entrypoint.sh
 
+# brand/ is the Austin DSA logo files and the two chapter brand faces, served by
+# server.py at /brand/. Only the DSA skin references them; the field skin never
+# requests one, so a missing brand/ would go unnoticed until someone switched
+# skins and got an unstyled page. 178 KB, all of it immutably cacheable.
+COPY brand/ ./brand/
+
 # The database lives on a Railway volume, NOT in the image. It is ~0.9-1.8 GB,
 # it changes on a data refresh rather than a code change, and baking it in would
 # make every code deploy re-upload it.

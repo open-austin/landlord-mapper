@@ -8,3 +8,12 @@ Dockerfile text eol=lf
 .dockerignore text eol=lf
 *.py text eol=lf
 *.toml text eol=lf
+
+# The brand assets. The two font files are binary and must never be touched by
+# eol conversion -- a single byte changed in an .otf and the face stops parsing.
+# The logos are XML, so git WOULD treat them as text and rewrite their endings on
+# a Windows checkout; harmless to the render, but it makes the diff against the
+# chapter branding kit noise instead of nothing.
+*.otf binary
+*.woff2 binary
+*.svg text eol=lf
