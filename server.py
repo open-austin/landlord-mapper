@@ -1763,9 +1763,18 @@ SKIN_FIELD = "field"
 SKIN_DSA = "dsa"
 SKINS = (SKIN_FIELD, SKIN_DSA)
 SKIN_COOKIE = "lm-skin"
-DEFAULT_SKIN = os.environ.get("LM_SKIN", SKIN_FIELD)
+
+# The chapter skin is what a first-time visitor gets: this is Austin DSA's tool
+# and it should look like it without anyone having to ask. The field-report skin
+# is still whole and one click away in the footer, and LM_SKIN=field flips the
+# default back without a code change.
+#
+# Note what this does NOT do: a browser that already chose a skin keeps it. The
+# cookie wins over this default, by design -- changing the default should not
+# yank the styling out from under someone mid-session.
+DEFAULT_SKIN = os.environ.get("LM_SKIN", SKIN_DSA)
 if DEFAULT_SKIN not in SKINS:
-    DEFAULT_SKIN = SKIN_FIELD
+    DEFAULT_SKIN = SKIN_DSA
 
 _CURRENT = threading.local()
 

@@ -20,6 +20,39 @@ Texas Comptroller franchise-tax filings.
 | `seed-chunked.sh` | Fallback seeder for a host without object storage: splits the archive across deploys and stages parts on the volume. |
 | `seed-image.sh` | Earlier single-deploy seeder. Kept only for a database small enough to fit the upload cap, which this one is not. |
 | `railway.toml` | Dockerfile builder, one replica, restart on failure, `/health` healthcheck. |
+| `brand/` | Austin DSA's logo file and the two chapter brand faces, served at `/brand/` off an allowlist. Only the `dsa` skin requests them. |
+
+## Two skins
+
+The site renders in one of two skins. **`dsa` is the default** — Austin DSA's
+colours, the chapter's Styrene B / Manifold DSA type, and the bat-and-rose mark.
+`field` is the original surveyor's-field-report look, still whole, one click away
+in the footer.
+
+```
+/anything?skin=dsa      switch, and remember it for a year
+/anything?skin=field    switch back
+LM_SKIN=field           change the default without a code change
+```
+
+Resolution order is **`?skin=` → cookie → `LM_SKIN` → `dsa`**. The query wins so
+a link can carry a skin to someone who has never chosen one; the cookie beats the
+default so changing the default never yanks the styling out from under a session
+already in progress.
+
+A skin is a block of ~20 CSS custom properties and nothing else. `CSS_BASE` in
+`server.py` is the entire design and names no colour and no typeface literally,
+only `var(--…)`, which is what stops the two skins drifting apart structurally
+and makes a third one a single new block. Two invariants are worth not breaking:
+
+- **No literal colours in `CSS_BASE`.** If you add a rule with a hex in it, that
+  rule is now the same in both skins and the split is broken.
+- **`--mono` is for figures, `--display` is for chrome.** Numbers and raw
+  compared strings stay monospace in *both* skins; Styrene B in the rankings
+  table stops the columns lining up. `--survey`/`--link` split the same way for
+  contrast: DSA red is 4.00:1 on brand paper and cannot carry small text, so
+  `--link` (`#c4151c`) does. `BRAND_NOTES` records the measured ratio behind
+  every value and which three are derived rather than taken from the brand.
 
 ## The one thing that is not in git
 
