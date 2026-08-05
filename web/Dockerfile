@@ -23,6 +23,9 @@ WORKDIR /app
 # reads the typed schema through SQL expressions, so it does not need them --
 # they travel with build-db.py.
 #
+# server.py is a thin entry point; the server itself is the lm/ package, copied
+# just below. It still imports only stdlib beyond lm/ itself.
+#
 # backfill-rank-totals.py must be listed here even though nothing imports it.
 # It is run by hand over `railway ssh` to write the meta.rank_totals key that
 # /rankings reads on its fast path, and this COPY is an explicit enumeration with
@@ -31,6 +34,12 @@ WORKDIR /app
 # with nothing logged to say which path is live.
 COPY server.py build-db.py typed.py retype.py backfill-rank-totals.py entrypoint.sh ./
 RUN chmod +x entrypoint.sh
+
+# lm/ is the server. server.py was one 4,600-line module and is now a package;
+# without this the image builds clean and then dies at start with
+# ModuleNotFoundError: No module named 'lm', because the COPY above is an
+# explicit enumeration with no wildcard.
+COPY lm/ ./lm/
 
 # brand/ is the Austin DSA logo files and the two chapter brand faces, served by
 # server.py at /brand/. Only the DSA skin references them; the field skin never
