@@ -937,206 +937,150 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
   situs_neighbor_ind
   
 }
-second_inds <- c(-1)
 situs_neighor_gen_final = function(owner_data_used,
                                    situs_neighbor_ind){
-  
-  
-  # readr::write_rds(situs_neighbor_ind,
-  #                  'situs_neighbor_ind.rds')  
-  # print(Sys.time())
+
+  # Assign every parcel a landlord-portfolio group id.
+  #
+  # situs_neighbor_ind$situs_neighbors holds, per situs row, a space-separated
+  # list of owner_data_used ROW INDICES that share that row's situs address. Two
+  # parcels belong to the same portfolio when they are reachable from each other
+  # through those shared rows, so the grouping is the transitive closure of
+  # "co-listed in some situs row" -- exactly the connected components of the
+  # bipartite incidence graph parcel <-> situs row. igraph computes that exactly,
+  # in one process, in seconds.
+  #
+  # This replaces a foreach(%dopar%) depth-capped BFS (iterative_add) that ran
+  # 24,596 s and was then cgroup-OOM-killed at 145 GB. Three separate defects
+  # made that version not worth repairing in place:
+  #
+  #   1. iterative_add was defined INSIDE this function, so future serialised its
+  #      enclosing frame to all 24 workers: owner_data_used (1321 MB),
+  #      situs_neighbor_ind (112 MB) and the strsplit token list (1439 MB) -- the
+  #      list twice over, because R's serialiser ref-tracks environments but not
+  #      vectors. About 4.4 GB per worker, about 105 GB in total. The
+  #      future.globals.maxSize = 4e9 guard could not catch it, because
+  #      object.size() on a closure reports 560 bytes: it does not follow the
+  #      environment.
+  #
+  #   2. second_inds was meant to be a global visited-set, but under multisession
+  #      "<<-" only ever mutated each worker's private copy, so the output
+  #      depended on FINAL_OUTPUT_WORKERS. Worse, the prune it fed made the
+  #      result incoherent rather than merely approximate: once a component had
+  #      been touched, every later row in it returned a small stub, and the
+  #      decreasing-length sort assigned stubs LAST, overwriting each full
+  #      component with a fragment of itself.
+  #
+  #   3. The consumer wrote the answer into a discarded copy:
+  #        sapply(..., function(index){ owner_data_used$group_assign[i] <- index })
+  #      Plain "<-" inside that closure creates a local binding, so the enclosing
+  #      frame was never touched -- verified in this image: the same pattern with
+  #      "<-" yields 0,0,0,0,0 where "<<-" yields 1,1,2,2,0. The author's
+  #      commented-out mirai version did use "<<-". This target therefore
+  #      returned group_assign == 0 for every parcel, so there is no prior output
+  #      to stay compatible with, and it also spent the run copying the 1.3 GB
+  #      frame once per group.
+  #
+  # Because the old output was a constant, exact components are a strict
+  # improvement rather than a behaviour change. They are also what the author was
+  # reaching for: the commented-out "while (new_length != base_length)" loop is
+  # full closure, and with the prune removed every row of a component returns the
+  # identical vector, which the outer unique() collapses to one entry per
+  # component.
+  #
+  # KNOWN DATA ARTEFACT, deliberately not papered over here: the largest
+  # component is 65,878 parcels spanning 30,250 situs rows, and its widest rows
+  # are street-only addresses carrying no house number ("GUILBEAU RD SAN ANTONIO
+  # 78250", "S LAREDO ST SAN ANTONIO 78207"). Parcels missing a house number
+  # normalise onto a bare street name, which chains unrelated owners together.
+  # That is an upstream address-normalisation problem in situs_neighor_gen; it is
+  # not fixed by capping component size here, because a cap would invent a
+  # grouping policy this function has no basis to choose. The size distribution
+  # is printed below so the artefact stays visible in the run log.
+
   print(dim(owner_data_used))
   print(dim(situs_neighbor_ind))
-  # print('neigh'
-  iterative_add = function(inds, 
-                           neighbors,
-                           situs_neighbors,
-                           situs_neighbors_padded,
-                           # situs_neighbor_ind = situs_neighbor_ind,
-                           depth = 2 ){
-    # neighbors <- as.character(neighbors)
-    # print(depth)
-    
-    # print(inds)
-    # print(neighbors)
-    # print(depth)
-    # print(length(inds))
-    # print(length(neighbors))
-    # dup_inds <- stringi::stri_detect_regex(inds,
-    #                                        sprintf('^%s$',
-    #                                                paste(neighbors,collapse = '$|^')
-    #                                                ))
-    # if(length(dup_inds)>0){
-    #   inds <- inds[!dup_inds]
-    # }
-    
-    
-    if(length(inds)==0){
-      return(NA)
-    }
-    # if(length(inds)>100){
-    #   return(inds)
-    # }
-    result <-unique(as.numeric(  
-      c(unlist(sapply(inds,
-                    
-                    function(ind){
-                      if(Rfast::is_element(neighbors, ind)){#ind %in% neighbors){
-                        if(depth!=2){
-                          return(NULL)
-                        }
-                        # # break
-                        return(ind)
-                      }
-                      inner_result_inds <- which(stringi::stri_detect_fixed(situs_neighbors_padded,
-                                                                            sprintf( ' %s ',
-                                                                                     ind),
-                                                                            # max_count = length(inds)*2,
-                                                                            opts_fixed = stringi::stri_opts_fixed(case_insensitive = TRUE))
-                                                 )
-                      
-                      
-                      inner_result <-unlist(situs_neighbors[inner_result_inds])
-                      inner_result <- inner_result[!(inner_result %in% inds)]
-                      # if((length(inds>500)) & (depth!=1)){
-                      # 
-                      # neighbors <<- unique(c(neighbors,
-                      #                          inner_result[inner_result == ind]))
-                      # }
-                      
-                      return(inner_result)
-                    })
-               ))))
-    # print('mid')
-    # print(result)
-    
-    
-    if(depth!=0){
-      sec_run <- result[!(sapply(result, function(result_used){ Rfast::is_element(neighbors,
-                                                                                  result_used)}))]
-      # [sapply(result,
-      #                          function(result_used){
-      #                            Rfast::is_element(c(inds,
-      #                                                neighbors),
-      #                                              result_used
-      #                                              )##
-      #                          }) ]#
-      # print(sec_run)
-      
-      if(length(sec_run)>0){
-        result <- unique(c(result,
-                           iterative_add(sec_run,
-                                         c(inds,
-                                           neighbors),
-                                         
-                                         # paste('',
-                                         #       paste(inds,
-                                         #         collapse = ' '),
-                                         #       neighbors),
-                                         situs_neighbors,
-                                         situs_neighbors_padded,
-                                         depth = depth-1)))
-      }
-      
-    }
-    result <- unique(c(result,
-                       inds))
-    # result[order(result)]
-  }
-  situs_neighbors <- strsplit(situs_neighbor_ind$situs_neighbors, split = ' ')
-  situs_neighbors_padded <- paste(' ', situs_neighbor_ind$situs_neighbors, ' ',
-                                  sep = '')
-  #   
-  situs_neighbors_shared <- mori::share(situs_neighbors)
-  
-  
-  options(future.globals.maxSize = 4e9)
-  registerDoFuture()
-  plan(multisession,
-       workers = FINAL_OUTPUT_WORKERS,
-       maxSizeOfObjects = 4e9)
-  # )
   print(Sys.time())
-  matched_owners_inds_uniq<-unique(foreach(inds =situs_neighbors_shared) %dopar% {
-    # print(inds)
-    # print('start')
-    # print(Sys.time())
-    # readr::write_rds(second_inds,'second_inds.rds')
-    result <-na.omit(iterative_add(inds = as.numeric(inds),
-                                   as.numeric(second_inds),
-                                   situs_neighbors,
-                                   situs_neighbors_padded
-                                   ))
-    
-    second_inds <<- unique(c(second_inds,
-                             result))
-    
-    # base_length <- length(result)
-    # new_length = 0
-    # while(new_length!=base_length){
-    #   base_length <- length(result)
-    #   result <- na.omit(c(result,
-    #                       iterative_add(result,
-    #                                   na.omit(second_inds),
-    #                                   depth = 0)))
-    #   second_inds <- c(second_inds,
-    #                    result)
-    #   
-    #   new_length <- length(result)
-    # }
-    
-    
-    # rem_inds <- which(situs_owner_cosine_dist_matrix[inds[1],result]>0.6)
-    # rem_inds <- unique(unlist(apply(situs_owner_cosine_dist_matrix[inds,result],2,
-    #                         function(col){which(col>0.6)})))
-    # rem_inds <- rem_inds[!(rem_inds %in% inds)]
-    # if(length(rem_inds)>0){
-    #   result <- result[-rem_inds]
-    # }
-    # result <- na.omit(append(result,
-    #                          iterative_add(result,
-    #                                        second_inds,
-    #                                        depth = 0)))
-    # second_inds <- unique(c(second_inds,
-    #                         result))
-    
-    # print('done')
-    # print(Sys.time())
-    #   # print('sec')
-    result <- unique(result[order(result)])
-    # print(second_inds)
-    # print(length(second_inds))
-    # print('done')
-    # print(result)
-    # print(length(result))
-    # second_inds <<- unique(c(second_inds,
-    #                          result))
-    result
-  })
-  #   
-  
-  
-  owner_data_used$group_assign <- 0
-  matched_owners_inds_uniq <- matched_owners_inds_uniq[order(sapply(matched_owners_inds_uniq,
-                                                                    length),
-                                                             decreasing = TRUE)]
-  # daemons(parallel::detectCores())
-  # mirai::mirai_map(1:length(matched_owners_inds_uniq),
-  #                  function(index) {
-  #                    indexes = as.numeric(matched_owners_inds_uniq[[index]])
-  #                    # print(indexes)
-  #                    owner_data_used$group_assign[indexes] <<- index
-  #                    })[.progress]
-  # daemons(0)
-  sapply(1:length(matched_owners_inds_uniq),
-         function(index){
-           # print(index)
-           indexes = as.numeric(matched_owners_inds_uniq[[index]])
-           # print(indexes)
-           owner_data_used$group_assign[indexes] <- index
-         })
-  
-  # print(situs_group_assignment)
+
+  n_parcels <- nrow(owner_data_used)
+  n_situs   <- nrow(situs_neighbor_ind)
+
+  # Same strsplit the old code did; only the consumer of it changed.
+  neighbor_tokens <- strsplit(situs_neighbor_ind$situs_neighbors, split = ' ')
+  token_counts    <- lengths(neighbor_tokens)
+  nonempty_rows   <- which(token_counts > 0L)
+
+  parcel_ids <- suppressWarnings(as.integer(unlist(neighbor_tokens[nonempty_rows],
+                                                   use.names = FALSE)))
+  situs_ids  <- rep.int(nonempty_rows, token_counts[nonempty_rows])
+  rm(neighbor_tokens)
+  invisible(gc())
+
+  # Guard the join instead of trusting it. A token that is not a usable row index
+  # of owner_data_used would otherwise create a phantom vertex and silently merge
+  # unrelated portfolios through it.
+  usable <- !is.na(parcel_ids) & parcel_ids >= 1L & parcel_ids <= n_parcels
+  if (any(!usable)) {
+    warning(sprintf('situs_neighor_gen_final: dropped %d of %d neighbour tokens outside 1..%d',
+                    sum(!usable), length(parcel_ids), n_parcels))
+    parcel_ids <- parcel_ids[usable]
+    situs_ids  <- situs_ids[usable]
+  }
+  rm(usable)
+
+  if (length(parcel_ids) == 0L) {
+    warning('situs_neighor_gen_final: no usable neighbour tokens; group_assign left all 0')
+    owner_data_used$group_assign <- integer(n_parcels)
+    print(Sys.time())
+    return(owner_data_used)
+  }
+
+  # Parcel vertices occupy 1..n_parcels and situs vertices sit above them, so the
+  # two id spaces cannot collide and a situs row can never be read as a parcel.
+  graph_used <- igraph::make_graph(c(rbind(parcel_ids, n_parcels + situs_ids)),
+                                   n = n_parcels + n_situs,
+                                   directed = FALSE)
+  membership <- igraph::components(graph_used)$membership
+  rm(graph_used)
+  invisible(gc())
+
+  # Only parcels that appear in at least one neighbour list get a group; the rest
+  # keep 0, so 0 keeps meaning "not grouped". Numbering runs largest component
+  # first, preserving the old code's intent that group 1 is the biggest
+  # portfolio.
+  #
+  # Residual behaviour worth knowing before touching shinyApp/app.R: 1,443,757
+  # parcels are named in no neighbour list at all and so all share label 0.
+  # app.R filters with group_assign %in% group_assign_used, so selecting an
+  # ungrouped parcel matches all 1.44M of them. That is still far better than
+  # today, where the column is uniformly 0 and any selection matches every
+  # row, and it keeps the author's group_assign <- 0 convention. The clean fix
+  # belongs in app.R: drop 0 from group_assign_used.
+  parcel_membership <- membership[seq_len(n_parcels)]
+  is_referenced     <- tabulate(parcel_ids, nbins = n_parcels) > 0L
+  parcels_per_comp  <- tabulate(parcel_membership[is_referenced],
+                                nbins = max(membership))
+
+  occupied          <- which(parcels_per_comp > 0L)
+  # Largest first, ties broken by component id, so the labelling is
+  # byte-identical across reruns by construction rather than by relying on
+  # order() happening to be stable for the sort method in play.
+  by_size           <- occupied[order(-parcels_per_comp[occupied], occupied)]
+  group_of          <- integer(length(parcels_per_comp))
+  group_of[by_size] <- seq_along(by_size)
+
+  group_assign <- integer(n_parcels)
+  group_assign[is_referenced] <- group_of[parcel_membership[is_referenced]]
+  owner_data_used$group_assign <- group_assign
+
+  sizes <- parcels_per_comp[by_size]
+  cat(sprintf('group_assign: %d of %d parcels grouped into %d groups, %d of them with 2+ parcels, largest %d\n',
+              sum(is_referenced), n_parcels, length(by_size),
+              sum(sizes >= 2L), sizes[1]))
+  cat('group size quantiles:\n')
+  print(quantile(sizes, c(0.5, 0.9, 0.99, 0.999, 1)))
+  cat('largest 10 groups: ', paste(utils::head(sizes, 10), collapse = ', '), '\n', sep = '')
+
   print(Sys.time())
   owner_data_used
 }
