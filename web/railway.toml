@@ -1,0 +1,42 @@
+# Railway service configuration.
+#
+# Dockerfile rather than a Nixpacks autodetect build: the app is stdlib-only, so
+# Nixpacks would infer a Python project, look for requirements.txt, find none,
+# and we would be relying on its guess. An explicit Dockerfile also pins the
+# interpreter to the version the output-identity harness was run against.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# The healthcheck is the one setting here worth explaining, because it could not
+# be enabled on the first deploy and can be now.
+#
+# /health is a good check -- 200 in ~1.4 ms, and it touches the database so it
+# genuinely fails when the volume is unreadable. But on the FIRST deploy the
+# volume is empty, entrypoint.sh sits in its wait loop until the database
+# arrives, and a healthcheck would have failed the deployment before there was a
+# running container to seed into at all. That is the same deadlock the wait loop
+# exists to break, reintroduced one layer up.
+#
+# ENABLED 2026-08-04, once the volume was seeded and the service verified
+# serving. The volume is persistent, so restarts find the database already in
+# place and this check now only ever reports real failures.
+#
+# Timeout is 60 rather than 30: a cold container has to open a 1.7 GB file and
+# the observed first-request latency on this host was ~0.4 s, but a restart that
+# coincides with a re-seed would take longer, and a healthcheck that fires early
+# would kill a container that is legitimately working.
+healthcheckPath = "/health"
+healthcheckTimeout = 60
+
+# The server holds no request state between requests and the database is opened
+# read-only, so a restart is always safe. ON_FAILURE rather than ALWAYS so a
+# genuine crash-loop surfaces as a failed deploy instead of restarting forever.
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+
+# One replica. Scaling out would mean N copies of the page cache against one
+# volume, and the measured bottleneck is page cache, not CPU.
+numReplicas = 1
