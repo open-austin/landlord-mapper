@@ -39,6 +39,9 @@ library(qs2)
 library(httr2)
 library(tidyr)
 library(mori)
+library(futurize)
+library(igraph)
+# install.packages('Rfast')
 library(Rfast)
 
 httr::set_config(httr::config(http_version = 2), override = TRUE)
@@ -69,7 +72,7 @@ data_links <- list(Code_Complaints = 'https://data.austintexas.gov/Public-Safety
 base_used = c('Austin_Code_Complaint_Cases',
               'Short_Term_Rental_Locations',
               'Zoning_Cases')
-Sys.setenv(CENSUS_KEY='f322ee41e382d77af0747477f0b47c8665a828bb')#'cdd487fd377da61dfdecfbcdb620f7a94f3c5b6f')
+# Sys.setenv(CENSUS_KEY='f322ee41e382d77af0747477f0b47c8665a828bb')#'cdd487fd377da61dfdecfbcdb620f7a94f3c5b6f')
 
 Sys.getenv("CENSUS_KEY")
 #            "GCS_AUTH_FILE" = "client_secret_970494625384-1qc5cm062uj9ljhsempgh0ririra3hoi.apps.googleusercontent.com.json")
@@ -81,12 +84,12 @@ library(gargle)
 ## Fetch token. See: https://developers.google.com/identity/protocols/oauth2/scopes
 # scope <-c("https://www.googleapis.com/auth/cloud-platform")
 # token <- token_fetch(scopes = scope)
-gcs_auth(json_file = "landlord-mapper-texas-triangle-72fb0e8772e1.json") # token = readRDS('token.rds'))
-# Sys.setenv('GAR_CLIENT_JSON'='landlord-mapper-texas-triangle-72fb0e8772e1.json')
-Sys.setenv("GCS_AUTH_FILE" = "landlord-mapper-texas-triangle-72fb0e8772e1.json")
+gcs_auth(json_file = "landlord-mapper-texas-triangle-948f8ad9d01e.json") # token = readRDS('token.rds'))
+# Sys.setenv('GAR_CLIENT_JSON'="landlord-mapper-texas-triangle-948f8ad9d01e.json")
+Sys.setenv("GCS_AUTH_FILE" = "landlord-mapper-texas-triangle-948f8ad9d01e.json")
 Sys.setenv("GCS_DEFAULT_BUCKET" = "cad-data-texas-triangle")
 gcs_global_bucket("cad-data-texas-triangle")
-# 
+
 project <- "Landlord-Mapper-Texas-Triangle"
 tar_option_set(
   packages = c("tibble",
@@ -106,6 +109,7 @@ tar_option_set(
                "readr",
                "tidyr",
                "foreach",
+               "futurize",
                "censusapi",
                "tidycensus",
                "httr2",
@@ -113,6 +117,7 @@ tar_option_set(
                "Rfast",
                "multidplyr",
                "mori",
+               "igraph",
                "mirai",
                "data.table"
                # "qs2"
@@ -368,8 +373,8 @@ list(
              #                  list.files("_targets\\objects")))>0
              ),
   tar_target(situs_group_assignments_final,
-             situs_neighor_gen_final(austin_parcel_data_merged_owner_clean,
-                                     situs_group_assignments_neigh
+             situs_neighor_gen_final(austin_parcel_data_merged_owner,
+                                    situs_group_assignments_neigh
                                      )
              # skip = sum(grepl('situs_group_assignments_final',
              #                  list.files("_targets\\objects")))>0
