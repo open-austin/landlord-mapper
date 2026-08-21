@@ -1,233 +1,4 @@
 
-financial_markers_base<- c('LTD',
-                           'L T D',
-                           'L\\.?T\\.?D\\.?',
-                           'LLC',
-                           'L L C',
-                           'L\\.?L\\.?C\\.?',
-                           'LP',
-                           'L P',
-                           'L\\.?P\\.?',
-                           'LLLP',
-                           'L L L P',
-                           'L\\.?L\\.?L\\.?P\\.?',
-                           'INC',
-                           'I N C',
-                           'I\\.?N\\.?C\\.?',
-                           'LC',
-                           'L C',
-                           'L\\.?C\\.?')
-financial_markers_supp <- c('MORTG',
-                            'RENT',
-                            'MARKET',
-                            'INVEST',
-                            'PROP',
-                            'MANAGE',
-                            'MGT',
-                            'MGMT',
-                            'ASSET',
-                            'JOINT',
-                            'VENTUR',
-                            'VNT',
-                            'LIMIT',
-                            'PARTN',
-                            'PRTN',
-                            'BANK',
-                            'ASSOC',
-                            'EQUIT',
-                            'REALT',
-                            'OWNER',
-                            'HOLDING',
-                            'DEVELOP',
-                            'COMP',
-                            'CORP',
-                            'AQUISI',
-                            'CONDO',
-                            'C/O',
-                            '[[:digit:]]',
-                            'BORROWER',
-                            'FOUNDA')
-
-financial_marker_string <- paste(paste(financial_markers_base, 
-                                       collapse = '|'),
-                                 paste(financial_markers_supp, 
-                                       collapse = '|'),
-                                 sep = '|')
-financial_marker_base_string <- paste(financial_markers_base, 
-                                      collapse = '|')
-
-
-address_clean = function(data = austin_parcel_data_merged,
-                         col = 'situs_address'){
-
-  data_used <- iconv(data[,col],to='UTF-8')
-  # print('1')
-  data_used <-gsub('-[[:digit:]]+$',
-                   '',
-                   data_used,
-                   useBytes = TRUE)
-  data_used <- gsub('SUITE|STE|CONDO|UNIT|"|APT|BLDG|[[:punct:]]',
-                   '', 
-                   data_used, useBytes = TRUE)
-  data_used <- gsub('P([[:space:]]|[[:punct:]])O[[:punct:]]?',
-                    'PO',
-                    data_used,
-                    useBytes = TRUE
-                    )  
-  data_used <- gsub('[[:space:]]+NA[[:space:]]+|[[:space:]]+NO[[:space:]]+',
-                    ' ',
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('^NA*[[:space:]]+|[[:space:]]+NA*$',
-                    '',
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('[[:space:]]{2,}',
-                    ' ',
-                    data_used,
-                    useBytes = TRUE)
-  # print('2')
-  data_used <-sapply(data_used,
-                     function(address){
-                       regex_used <- '[[:digit:]]+TH|[[:digit:]]+RD|[[:digit:]]+ND'
-                       start_ind <- regexpr(regex_used, address)
-                       # print(attr(start_ind, 
-                       #            'match.length'))
-                       match_length_str <- attr(start_ind, 
-                                                'match.length')
-                       if(is.na(match_length_str)|
-                          (match_length_str==(-1))){
-                         return(address)
-                       }
-                       gsub(regex_used,
-                            substr(address,(start_ind),(start_ind+match_length_str-3
-                            )
-                            ),
-                            address,
-                            useBytes = TRUE)
-                     }
-                     )
-  # print('3')
-  data_used <- gsub('COUNTY ROAD',
-                    'CR',
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('RANCH ROAD',
-                    'RR',
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('DRIVE',
-                    'DR',
-                    data_used,
-                    useBytes = TRUE)
-  data_used<- gsub('INTERSTATE',
-                   'IH',
-                   data_used,useBytes = TRUE)
-  data_used<- gsub('LANE',
-                   'LN',
-                   data_used,
-                   useBytes = TRUE)
-  data_used<- gsub('ROAD',
-                   'RD',
-                   data_used,
-                   useBytes = TRUE)
-  data_used <- gsub('TRAIL',
-                    'TRL',
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('STREET',
-                    'ST',
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('FREEWAY',
-                    'FRWY',
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('BLUFF',
-                    'BLF',
-                    data_used,
-                    useBytes = TRUE)
-  data_used<- gsub('FLOOR',
-                   'FL',
-                   data_used,
-                   useBytes = TRUE)
-  data_used <- gsub('PLAZA',
-                    'PLZ',
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('AVENUE',
-                    'AVE',
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('CIRCLE',
-                    'CIR',  
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('LANE',
-                    'LN',
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('PARKWAY',
-                    'PKWY',
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('WAY',
-                    'WY',
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('COURT',
-                    'CT',
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('COVE',
-                    'CV',
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('PLACE',
-                    'PL',
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('POINT',
-                    'PT',
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('HL',
-                    'HILL',
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('SPGS',
-                    'SPRINGS',
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('BOULEVARD',
-                    'BLVD',
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('MOUNTAIN',
-                    'MTN',
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('NORTH',
-                    'N',
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('WEST',
-                    'W',                   
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('SOUTH',
-                    'S',
-                    data_used,
-                    useBytes = TRUE)
-  data_used <- gsub('EAST',
-                    'E',
-                    data_used,
-                    useBytes = TRUE)
-  # print('4')
-  return(trimws(data_used))
-  
-}
-
 
 get_business_details = function(business_string){
   
@@ -296,24 +67,37 @@ type_name = function(entity_name_search_box,
                      ){
   if(try==1){
     elem_set_value(entity_name_search_box,
-                   trimws(gsub(paste('([[:space:]]|[[:punct:]])?(?=',
-                                     financial_marker_base_string,
-                                     '.*)', sep = ''),
-                               ', ',
-                               name,
-                               perl = TRUE)
+                   trimws(gsub(sprintf('(?<=(%s)).*',
+                                       paste(sapply(financial_markers_base,
+                                                    function(s){sprintf('(^|[^[:alnum:]])%s($|[^[:alnum:]])',s)}),
+                                             collapse = '|')),
+                               '',
+                               gsub(paste('([[:space:]]|[[:punct:]])+(?=',
+                                          financial_marker_base_string,
+                                          '.*)', sep = ''),
+                                    ', ',
+                                    name,
+                                    perl = TRUE),
+                               perl = TRUE
+                   )
                    )
     )
   }
   if(try==2){
     
     elem_set_value(entity_name_search_box,
-                   trimws(gsub(paste('([[:space:]]|[[:punct:]])?(?=',
-                                     financial_marker_base_string,
-                                     '.*)', sep = ''),
-                               ' ',
-                               name,
-                               perl = TRUE)
+                   trimws(gsub(sprintf('(?<=(%s)).*',
+                                       paste(sapply(financial_markers_base, function(s){sprintf('(^|[^[:alnum:]])%s($|[^[:alnum:]])',s)}),
+                                             collapse = '|')),
+                               '',
+                               gsub(paste('([[:space:]]|[[:punct:]])+(?=',
+                                          financial_marker_base_string,
+                                          '.*)', sep = ''),
+                                    ' ',
+                                    name,
+                                    perl = TRUE), 
+                               perl = TRUE
+                   )
                    )
     )
     
@@ -321,8 +105,9 @@ type_name = function(entity_name_search_box,
   if(try==3){
     
     elem_set_value(entity_name_search_box,
-                   trimws(gsub(paste('([[:space:]]|[[:punct:]])?',
+                   trimws(gsub(paste('([[:space:]]|[[:punct:]])+(',
                                      financial_marker_base_string,
+                                     ').*',
                                      sep = ''),
                                '',
                                name,
@@ -337,32 +122,46 @@ set_name = function( name,
                      try = 1
                      ){
   if(try==1){
-    return(trimws(gsub(paste('([[:space:]]|[[:punct:]])+(?=',
+    return(trimws(gsub(sprintf('(?<=(%s)).*',
+                               paste(sapply(financial_markers_base, function(s){sprintf('(^|[^[:alnum:]])%s($|[^[:alnum:]])',s)}),
+                                     collapse = '|')),
+                       '',
+                       gsub(paste('([[:space:]]|[[:punct:]])+(?=',
                                      financial_marker_base_string,
                                      '.*)', sep = ''),
                                ', ',
                                name,
-                               perl = TRUE)
+                               perl = TRUE),
+                       perl = TRUE
+                       )
                    )
            )
   }
   if(try==2){
     
-    return(trimws(gsub(paste('([[:space:]]|[[:punct:]])+(?=',
+    return(trimws(gsub(sprintf('(?<=(%s)).*',
+                               paste(sapply(financial_markers_base, function(s){sprintf('(^|[^[:alnum:]])%s($|[^[:alnum:]])',s)}),
+                                     collapse = '|')),
+                       '',
+                        gsub(paste('([[:space:]]|[[:punct:]])+(?=',
                                      financial_marker_base_string,
                                      '.*)', sep = ''),
                                ' ',
                                name,
-                               perl = TRUE)
+                               perl = TRUE), 
+                       perl = TRUE
+                        )
                    )
-    )
+           
+           )
     
   }
   if(try==3){
     
-    return(trimws(gsub(paste('([[:space:]]|[[:punct:]])+',
-                                     financial_marker_base_string,
-                                     sep = ''),
+    return(trimws(gsub(paste('([[:space:]]|[[:punct:]])+(',
+                             financial_marker_base_string,
+                             ').*',
+                             sep = ''),
                                '',
                                name,
                                perl = TRUE)
@@ -1149,7 +948,7 @@ cpa_api_request = function(base_string,
   url_string <-URLencode(sprintf(base_string,
                                         input))
   used_request <- request(url_string) %>%
-    httr2::req_headers('x-api-key' = api_key_used) %>%
+   httr2::req_headers('x-api-key' = api_key_used) %>%
     httr2::req_perform() %>%
     httr2::resp_body_json()# 
 }
@@ -1157,6 +956,7 @@ cpa_api_request = function(base_string,
 
 cpa_franchise_get = function(taxId,
                              api_key_used){
+  #https://api.comptroller.texas.gov/public-data/v1/public/franchise-tax/
   franchise_info <- cpa_api_request("https://comptroller.texas.gov/data-search/franchise-tax/%s",
                   taxId,
                   api_key_used)$data
@@ -1220,9 +1020,11 @@ scrape_owner_api = function(owner_name,
                         owner_mail_address = NA,
                         owner_active_year = NA,
                         business_details_table = NA){
-  # print(depth)
-  # print(owner_name) 
-  # print(owner_mail_address)
+  print('depth')
+  print(depth)
+  print(owner_name   )
+  #88667
+  print(owner_mail_address)
   api_key = readLines('cpa_key.txt', warn = FALSE)
   # payers_response <- cpa_api_request("https://api.comptroller.texas.gov/public-data/v1/public/sales-tax-payer?searchType=legalName&BUSINESS_NAME=%s",
   #                                 owner_name,
@@ -1233,23 +1035,42 @@ scrape_owner_api = function(owner_name,
   #                 owner_name,
   #                 api_key)
   # print('0')
-  payers_response <- cpa_api_request("https://comptroller.texas.gov/data-search/franchise-tax?name=%s",
-                                     owner_name,
-                                     api_key)
+  
+  payers_response <- tryCatch({
+    #https://api.comptroller.texas.gov/public-data/v1/public/sales-tax-payer?searchType=legalName&BUSINESS_NAME=%s
+    cpa_api_request("https://comptroller.texas.gov/data-search/franchise-tax?name=%s",
+                    
+                    owner_name,
+                    api_key)
+    },
+    error=function(cond){
+      cond})
+  
   # print('initial')
-  try_used = 1
+  
+  try_used = 0
 
   while(payers_response$count==0){
-    # print(try_used)
+    
     try_used = try_used+1
+    
+    
+    # print(try_used)
     if(try_used>3){
       return(NULL)
     }
-    payers_response <- cpa_api_request("https://comptroller.texas.gov/data-search/franchise-tax?name=%s",
-                                       set_name(owner_name,
-                                                try_used
-                                                ),
-                                       api_key)
+
+    payers_response <-tryCatch({
+      #https://api.comptroller.texas.gov/public-data/v1/public/sales-tax-payer?searchType=legalName&BUSINESS_NAME=%s
+      cpa_api_request("https://comptroller.texas.gov/data-search/franchise-tax?name=%s",
+                      
+                      set_name(owner_name,
+                               try_used
+                               ),
+                      api_key)
+      },
+      error=function(cond){
+        cond})
     }
   try_used = 1
   taxId <- unlist(lapply(payers_response$data,
@@ -1258,17 +1079,19 @@ scrape_owner_api = function(owner_name,
                                   
                                 }))[1]
   
-  # print(taxId)
+  
+  print(taxId)
   franchise_info <- cpa_franchise_get(taxId,
                                       api_key)
   
   business_details_table_parse = franchise_info[[1]]
   owner_details_table_parse = franchise_info[[2]]
-  # print(owner_details_table_parse)
+  print(business_details_table_parse)
+  print(owner_details_table_parse)
   if(nrow(owner_details_table_parse)==0){
     # print('1')
     #no results on a recursive owner search
-    if(depth>0 ){
+    if(depth<3 ){
       
       # print('1.1')
       owner_table = data.frame(owner_name = owner_name,
@@ -1282,8 +1105,8 @@ scrape_owner_api = function(owner_name,
       results$situs_address <- situs_address
     }
     #no results on base owner search
-    if(depth==0 ){
-      # print('1.2')
+    if(depth==3 ){
+      print('1.2')
       owner_table = data.frame(owner_name = NA,
                                owner_title = NA,
                                owner_address = NA,
@@ -1298,14 +1121,16 @@ scrape_owner_api = function(owner_name,
   }
   #found results
   else{
-    # print('2')
+    print('2')
     finance_inds <- grepl(financial_marker_string,
                           owner_details_table_parse$owner_name)
+    # print('ind')
+    # print(finance_inds)
     # repeat_inds <- which(owner_details_table_parse$owner_name==owner_name)
     #if owner has financial markers, do a recursive search on it
     if(depth>=0){
       if(sum(finance_inds)>0){
-        # print('2.1')
+        print('2.1')
         owners_fin = foreach(ind = which(finance_inds),
                              .combine = 'rbind') %do% {
                                fin_owner_scrape = tryCatch({
@@ -1319,6 +1144,7 @@ scrape_owner_api = function(owner_name,
                                                          business_details_table_parse)
                                  }
                                  else{
+                                   print('recurse')
                                    scrape_owner_api( owner_details_table_parse$owner_name[ind],
                                                      situs_pID = situs_pID , 
                                                      situs_address = situs_address,
@@ -1335,7 +1161,11 @@ scrape_owner_api = function(owner_name,
                                  cond
                                })
                                
-                               if('error' %in% class(fin_owner_scrape)){
+                              print(fin_owner_scrape)
+                              print(class(fin_owner_scrape))
+                               
+                               if((is.null(fin_owner_scrape))|
+                                  ('error' %in% class(fin_owner_scrape)) ){
                                  
                                  # print('error')
                                  owner_fin = data.frame(owner_name = owner_details_table_parse$owner_name[ind],
@@ -1347,16 +1177,20 @@ scrape_owner_api = function(owner_name,
                                  fin_owner_scrape = officer_business_bind(owner_fin,
                                                                           business_details_table_parse)
                                }
+                               # print(fin_owner_scrape)
+                               # print(dim(fin_owner_scrape))
+                               fin_owner_scrape$situs_pID <- situs_pID
+                               fin_owner_scrape$situs_address <- situs_address
                                fin_owner_scrape
                                
                              }
-        # print(depth)
-        # print('fin')
+        print(depth)
+        print('fin')
         owners_fin$situs_pID <- situs_pID
         owners_fin$situs_address <- situs_address
-        # print(owners_fin)
+        print(owners_fin)
         if(sum(!finance_inds)>0){
-          # print('2.2')
+          print('2.2')
           owners_non_fin = data.frame(owner_name = owner_details_table_parse$owner_name,
                                       owner_title = owner_details_table_parse$owner_title,
                                       owner_address = owner_details_table_parse$owner_mail_address,
@@ -1422,18 +1256,24 @@ scrape_owner_api = function(owner_name,
   # print(results)
   results$owner_address <- address_clean(results,
                                              'owner_address')
+  results$corp_mail_address  <- address_clean(results,
+                                              'corp_mail_address')
   results$corp_registered_agent_add  <- address_clean(results,
                                               'corp_registered_agent_add')
   results$owner_name <- address_clean(results,
                                       'owner_name')
+  results$corp_business_name <- address_clean(results,
+                                      'corp_business_name')
   results$corp_registered_agent_name  <- address_clean(results,
                                                       'corp_registered_agent_name')
-  # results$owner_mail_address <- address_clean(results,
-  #                                            'owner_mail_address')
+  
   results$situs_pID <- situs_pID
+
   results$situs_address <- situs_address
   # print(results)
+  # print(depth)
   # print('results')
+  # print(dim(results))
   # print(results)
   return(results)
 }
@@ -1467,32 +1307,40 @@ owner_scrape_actual = function(austin_parcel_data_merged
                                             rate =purrr::rate_backoff(pause_base = 2,#5,
                                                                 pause_cap = 5,#30,
                                                                 pause_min = 2,
-                                                                max_times = 2,
+                                                                max_times = 4,
                                                                 jitter = TRUE
                                             ))
+  
+  # austin_parcel_data_merged <- head(austin_parcel_data_merged,10000)
   if(is.na(file.size('owner_data_total.csv'))|
      file.size('owner_data_total.csv')<40000000){
     # print('1')
     
     target_properties = dplyr::filter(austin_parcel_data_merged,
                                       ((is_financialized ==TRUE)&
-                                         (is_owner_occupied==FALSE))|
-                                        (property_units>5),
-                                      property_units!=0)
+                                         (is_owner_occupied==FALSE)),#|
+                                      #   (property_units>4),
+                                      property_units!=0,
+                                      !is.na(property_units)
+                                      )
     if(!is.na(file.size('owner_data_total.csv'))){
+      
       target_owner_info <- read.csv('owner_data_total.csv')
+      print(dim(target_owner_info))
       target_properties <- dplyr::filter(target_properties,
                                          (as.numeric(situs_pID) %in% 
                                             as.numeric(unique(target_owner_info$situs_pID))==FALSE ))
       print(dim(target_properties))
       registerDoFuture()
       plan(multisession, workers = parallel::detectCores())
+      
+      
       target_owner_info = foreach(index =1:nrow(target_properties),
                                   .combine = 'rbind',
                                   .options.RNG = 8989,
                                   .export = financial_marker_string) %dopar% {
                                     # print(index)
-                                    owner_name =target_properties$owner_name[index]
+                                    owner_name = target_properties$owner_name[index]
                                     owner_address = target_properties$owner_address[index]
                                     situs_pID = target_properties$situs_pID[index]
                                     situs_address = target_properties$situs_address[index]
@@ -1506,6 +1354,7 @@ owner_scrape_actual = function(austin_parcel_data_merged
                                                                                          situs_address = situs_address,
                                                                                          veneer_owner = owner_name,
                                                                                          veneer_owner_mail_address = owner_address)},
+                                                                    
                                                                     error=function(cond){
                                                                       cond}
                                                                     )
@@ -1522,7 +1371,7 @@ owner_scrape_actual = function(austin_parcel_data_merged
                                     # print(dim(data.frame(as.matrix(property_owner_info))))
                                     # print(data.frame(as.matrix(property_owner_info)))
                                     colnames(property_owner_info) <- colnames_used
-                                    # print(property_owner_info)
+                                    print(property_owner_info)
                                     # print('write')
                                     data.table::fwrite(property_owner_info,
 
@@ -1534,6 +1383,10 @@ owner_scrape_actual = function(austin_parcel_data_merged
                                   }
     }
     else{
+      print('none')
+      registerDoFuture()
+      plan(multisession, workers = parallel::detectCores())
+      
       target_owner_info = foreach(index =1:nrow(target_properties),
                                   .combine = 'rbind',
                                   .options.RNG = 8989,
@@ -1561,8 +1414,10 @@ owner_scrape_actual = function(austin_parcel_data_merged
                                                                             situs_address)
                                       ))
                                     }
+                                    
                                     first_prop <- index!=1
                                     colnames(property_owner_info) <- colnames_used
+                                    print(property_owner_info)
                                     data.table::fwrite(property_owner_info,
                                                        
                                                        'owner_data_total.csv',
@@ -1578,17 +1433,23 @@ owner_scrape_actual = function(austin_parcel_data_merged
   }
   print('done')
   target_owner_info <- read.csv('owner_data_total.csv')
-  
+  # print(dim(target_owner_info))
+  # print(head(target_owner_info))
   # austin_parcel_data_merged <- qs2::qs_read("_targets\\objects\\austin_parcel_data_merged_code")
     # mutate(situs_pID = as.numeric(situs_pID))
   # print('2')
-  # austin_parcel_data_merged <- austin_parcel_data_merged %>%
-  #   mutate(situs_pID=as.integer(situs_pID))
+  austin_parcel_data_merged <- austin_parcel_data_merged %>%
+    mutate(situs_pID=as.integer(situs_pID))
   austin_parcel_data_merged <- dplyr::left_join(austin_parcel_data_merged,
                                                   target_owner_info,
                                                   by = c('situs_pID',
                                                          'situs_address'
                                                          ))
+  # print(colnames(austin_parcel_data_merged))
+  
+  
+  # print(head(austin_parcel_data_merged))
+  # print(dim(austin_parcel_data_merged))
   
   austin_parcel_data_merged$owner_address_scraped <- address_clean(austin_parcel_data_merged,
                                                                             'owner_address_scraped')
