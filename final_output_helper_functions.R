@@ -83,7 +83,7 @@ gcs_save_file_upload = function(file_name,
 name_clean = function(data_used){
   data_used <- toupper(iconv(data_used,to='UTF-8'))
   
-  data_used <-gsub(paste(sapply(financial_markers_base, function(s){sprintf('(^|[^[:alnum:]])%s($|[^[:alnum:]])',s)}),
+  data_used <-gsub(paste(sapply(c(financial_markers_base,'CO','US','[[:digit:]]{1}'), function(s){sprintf('(^|[^[:alnum:]])%s($|[^[:alnum:]])',s)}),
                              collapse = '|'),
                        ' ',
                        data_used,
@@ -92,11 +92,30 @@ name_clean = function(data_used){
                         '',
                         data_used,
                         useBytes = TRUE)
-  data_used <- gsub('AD VALOREM|TAX DEPT|PROPERTY TAX|TAX DEPARTMENT|TAX|DBA|FBO|FKA|LIVING|TRUST|REVOCABLE|CORP|(CORPORATION)|INC|INCORPORATED|LIMITED|PARTN(ER)?(SHIP)?',
+  data_used <- gsub('([[:space:]])[[:digit:]]{5,}([[:space:]])',
+                    ' ',
+                    data_used,
+                    useBytes = TRUE)
+  data_used <- gsub('INVESTMENT(S)?|COMPANY|ESTATE|ENTERPRISE(S)?||REAL ESTATE|SERVICE(S)?|RODRIGUEZ|INVESTMENT(S)?|GROUP|HOLDING(S))?|PROPERT(IES|Y)|ATTN|AD VALOREM|TAX DEPT|PROPERTY TAX|TAX DEPARTMENT|TAX|DBA|FBO|FKA|LIVING|TRUST|REVOCABLE|CORP|(CORPORATION)|INC|INCORPORATED|LIMITED',
                     '',
                     data_used,
                     useBytes = TRUE)
   #ASSOCIATION ASSN
+  
+  data_used <- gsub('TRST',
+                    'TRUST',
+                    data_used,
+                    useBytes = TRUE)
+  
+  data_used <- gsub('MANAGE(R|MENT)?',
+                      'MGT',
+                      data_used,
+                      useBytes = TRUE)
+  data_used <- gsub('PARTNER(SHIP)?',
+                    'PTSHP',
+                    data_used,
+                    useBytes = TRUE)
+    
   data_used <- gsub('ASSOCIATION',
                     'ASSN',
                     data_used,
@@ -345,13 +364,13 @@ reg_agent_string_gen = function(data_used,
   #                     function(name){nrow(dplyr::filter(owner_data_total_supp,
   #                                                       owner_address==name))})
   
-  registered_agent_inds <- which(c(grepl('RYAN LLC|ASSOC|CONSULT|COGENCY|REGISTER|(IN)?CORPORAT(E|ION)?|SERVICE|LAWYER|CSC|SOLUTION|AGENT|AGENC|LEGAL|BUSINESS|TAX|MAIL|POST|LAW|ADVIS',
+  registered_agent_inds <- which(c(grepl('RYAN LLC|ASSOC|CONSULT|COGENCY|REGISTER|(IN)?CORPORAT(E|ION)?|SERVICE|LAWYER|CSC|SOLUTION|AGENT|AGENC|LEGAL|BUSINESS|TAX|MAIL|POST|LAW|ADVIS|REGIRED',
                                          data_used$corp_registered_agent_name,
                                          ignore.case = TRUE)
   ))
   # print(registered_agent_inds)
   
-  agent_inds <- which(grepl('RYAN LLC|ASSOC|CONSULT|COGENCY|REGISTER|(IN)?CORPORAT(E|ION)?|SERVICE|LAWYER|CSC|SOLUTION|AGENT|AGENC|LEGAL|BUSINESS|TAX|MAIL|POST|LAW|ADVIS',
+  agent_inds <- which(grepl('RYAN LLC|ASSOC|CONSULT|COGENCY|REGISTER|(IN)?CORPORAT(E|ION)?|SERVICE|LAWYER|CSC|SOLUTION|AGENT|AGENC|LEGAL|BUSINESS|TAX|MAIL|POST|LAW|ADVIS|REGIRED',
                             data_used$agent_name,
                             ignore.case = TRUE))
   
@@ -439,16 +458,17 @@ reg_agent_string_gen = function(data_used,
   # print('misc name')
   # print(misc_name_string)
   misc_add_string <- list(paste(c('815 BRAZOS.+AUSTIN TX 78701',
-                                  '2595 DALLAS PKWY.+FRISCO TX 75034',
-                                  '401 TOM LANDRY HWY.+DALLAS TX 75266',
-                                  'PO BOX 4090 SCOTTSDALE AZ 85261',
-                                  'PO BOX 592226 SAN ANTONIO TX 78259',
+                                  '2595 DALLAS P.+FRISCO TX 75034',
+                                  '401 TOM LANDRY H.+DALLAS TX 75266',
+                                  '5900 BALCONES.+AUSTIN.+',
+                                  'PO BOX 4090.+SCOTTSDALE AZ 85261',
+                                  'PO BOX 592226.+SAN ANTONIO TX 78259',
                                   '901.+MOPAC.+AUSTIN TX 78746',
                                   '901.+MO PAC.+AUSTIN TX 78746',
                                   '3225 MCLEOD DR.+LAS VEGAS NV 89121',
                                   '17350 STATE H.+HOUSTON TX 77064',
                                   '304 S JONES.+LAS VEGAS NV 89107',
-                                  '3839 BEE CAVE RD 200 AUSTIN TX 78746 US',
+                                  '3839 BEE CAVE.+AUSTIN TX 78746 US',
                                   high_own_num_addrs_ret),
                                 collapse = '|'))
   
@@ -703,15 +723,13 @@ situs_neighor_gen_clean = function(owner_data_used){
     partition(cl) %>%
     mutate(owner_address = name_clean(agent_string_sub(toupper(owner_address),
                                             registered_agent_string_list$addresses)),
+           corp_mail_address = name_clean(agent_string_sub(toupper(corp_mail_address),
+                                                registered_agent_string_list$addresses)),
+           owner_address_scraped = name_clean(agent_string_sub(toupper(owner_address_scraped),
+                                                    registered_agent_string_list$addresses)),
            
-           
-           corp_mail_address = agent_string_sub(toupper(corp_mail_address),
-                                                registered_agent_string_list$addresses),
-           owner_address_scraped = agent_string_sub(toupper(owner_address_scraped),
-                                                    registered_agent_string_list$addresses),
-           
-           corp_registered_agent_mail_add =  agent_string_sub(toupper(corp_registered_agent_mail_add),
-                                                              registered_agent_string_list$addresses),
+           corp_registered_agent_mail_add = name_clean(agent_string_sub(toupper(corp_registered_agent_mail_add),
+                                                              registered_agent_string_list$addresses)),
            # agent_address = agent_string_sub(toupper(agent_address),
            #                                  registered_agent_string_list),
            
@@ -772,13 +790,10 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
   print(Sys.time())
   # readr::write_rds(owner_data_used,'owner_data_used_proc.rds')
   # 
-  cl <- multidplyr::new_cluster(parallel::detectCores())
+  gc()
+  cl <- multidplyr::new_cluster(round(3*parallel::detectCores()/4))
   # 
-  multidplyr::cluster_assign(cl,
-                             pIDs_used = pIDs_used,
-                             addresses_used = addresses_used,
-                             situs_owner_cosine_dist_matrix = situs_owner_cosine_dist_matrix,
-                             owner_data_used = owner_data_used)
+  
   # valid_owner_address <- nchar(owner_data_used$owner_address)>20
   owner_data_used_names <-paste(' ',
                                 paste(owner_data_used$owner_name_scraped,
@@ -794,7 +809,16 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
                                                   owner_data_used$corp_mail_address,
                                                   owner_data_used$corp_registered_agent_mail_add
                                                   ),
-                                ' ',sep = '')
+                                ' ',
+                                sep = '')
+  multidplyr::cluster_assign(cl,
+                             pIDs_used = pIDs_used,
+                             addresses_used = addresses_used,
+                             situs_owner_cosine_dist_matrix = situs_owner_cosine_dist_matrix,
+                             owner_data_used = owner_data_used
+                             # owner_data_used_names = owner_data_used_names,
+                             # owner_data_used_addrs = owner_data_used_addrs
+                             )
   # readr::write_rds(owner_data_used_addrs,
   #                  'owner_data_used_addrs.rds' )
   # readr::write_rds(owner_data_used_names,
@@ -822,7 +846,7 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
                                    corp_business_name,
                                    corp_registered_agent_name)))
     
-      names_used <- names_used[which(nchar(names_used)>3)]
+      names_used <- names_used[which(nchar(names_used)>8)]
       if(length(names_used)>0){
         name_string_used <- sprintf(' %s ',
                                     paste(names_used,
@@ -932,7 +956,7 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
                                             unique(situs_address),
                                             sep = '\\|'),
                                       colnames(situs_owner_cosine_dist_matrix)
-        ))
+                                      ))
         # print('situs_dist')
         # print(situs_dist_ind)
         dist_inds <- tryCatch({
@@ -1008,16 +1032,28 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
                                                                 as.numeric(dist_neighs) %in% 
                                                                   n_used))>1}
                                          )]
-      }
+        neighbors_final_edge_weights <- sapply(neighbors_final,
+                                                               function(n_used){
+                                                                 
+                                                                 sum(c(as.numeric(name_neighs[which(names(name_neighs)==n_used)]),
+                                                                       as.numeric(addr_neighs[which(names(addr_neighs)==n_used)]),
+                                                                       as.numeric(dist_neighs) %in% 
+                                                                         n_used))
+                                                                 })
+        }
       else{
         # print(neighbors)
         neighbors_final <- integer()
+        neighbors_final_edge_weights <- integer()
       }
       
       
       # print(neighbors_final)
-      c(paste(neighbors_final,
-              collapse = ' '))
+      c(paste(paste(neighbors_final,
+                    neighbors_final_edge_weights,
+                    sep='-'),
+              collapse = ' ')
+        )
     }) %>%
     collect()
   # parallel::stopCluster(cl)
@@ -1145,26 +1181,56 @@ situs_neighor_gen_final = function(owner_data_used,
   # print(Sys.time())
   # gcs_save_file_upload('indexes_used.rds',
   #                      indexes_used)
-  owner_data_used <- mori::share(owner_data_used)
-  situs_neighbors <-mori::share(strsplit(situs_neighbor_ind$situs_neighbors, split = ' '))
+  # owner_data_used <- mori::share(owner_data_used)
+  # situs_neighbor_ind <- mori::share(situs_neighbor_ind)
+  situs_neighbors <-mori::share(lapply(strsplit(situs_neighbor_ind$situs_neighbors, split = ' '),
+                                       function(neighbors){
+                                         sapply(neighbors,
+                                                function(n_used){
+                                                  strsplit(n_used,split='-')[[1]][1]})
+                                       }) 
+                                )
+  
+  situs_weights <-mori::share(lapply(strsplit(situs_neighbor_ind$situs_neighbors, split = ' '),
+                                     function(neighbors){
+                                       sapply(neighbors,
+                                              function(n_used){
+                                                strsplit(n_used,split='-')[[1]][2]})
+                                     })
+  )
   
   situs_indexes <- mori::share(strsplit(situs_neighbor_ind$indexes_used, split = ' '))
   
   print(head(situs_neighbors))
+  print(head(situs_weights))
   print(head(situs_indexes))
-  plan(sequential)
-  
-  # cl <- makeCluster(4, type="SOCK")
+  # plan(sequential)
+  # library(doSNOW)
+  # cl <- makeCluster(8, type="SOCK")
   # registerDoSNOW(cl)
+  # registerDoParallel(core = 8)
   registerDoFuture()
   plan(multisession)
+  # registerDoSNOW(cl)
   # src_nodes <- c()
   # dest_nodes <- c()
-  adj_list <- list()
+  # adj_list <- list()
+  # blocs <-
+  #   df %>%
+  #   mutate(batch = row_number() %% ncores) %>%
+  #   nest(-batch) %>%
+  #   pull(data)
+  # split(1:nrow(situs_neighbor_ind),
+  #       seq_len(nrow(situs_neighbor_ind)) %% 
+  #         parallel::detectCores() +1), 
   print(Sys.time())
-  edge_list <- foreach(index = 1:nrow(situs_neighbor_ind),
-                       .combine = 'rbind'
-                       ) %dopar% {
+  edge_list <- do.call(rbind,
+                       future.apply::future_sapply(1:nrow(situs_neighbor_ind),
+                       # .options.future = list(chunk.size = 10000,
+                       #                        scheduling = 1),
+                       # .combine = 'rbind',
+                       # .inorder = FALSE
+                       function(index){
 
                          # print(index)
                          # print(length(adj_list))
@@ -1172,6 +1238,7 @@ situs_neighor_gen_final = function(owner_data_used,
                           nodes_used <- situs_indexes[[index]]
                           
                           neighbors_used <- situs_neighbors[[index]]
+                          weights_used <- situs_weights[[index]]
                           # print(nodes_used)
                           if(length(nodes_used)==0){
                             return()
@@ -1190,7 +1257,10 @@ situs_neighor_gen_final = function(owner_data_used,
                                                rep(length(neighbors_used),
                                                    length(nodes_used))),
                                      dest = rep(neighbors_used,
-                                                length(nodes_used)))
+                                                length(nodes_used)),
+                                     weight = rep(weights_used,
+                                                  length(nodes_used))
+                                     )
                                    
                           # sapply(nodes_used,
                           #          function(node){
@@ -1205,13 +1275,21 @@ situs_neighor_gen_final = function(owner_data_used,
                                 #     dest = dest_nodes
                          #            )
 
-                       } #|> futurize()
-  print(Sys.time())
+                       })
+                       )#|> futurize()
   
-  # readr::write_rds(adj_list, 
-  #                  'adj_list.rds')
+  # edge_list <- foreach(chunk_used = edge_list,
+  #                            .combine = 'rbind',
+  #                            .inorder = FALSE) %dopar%{
+  #                              chunk_used
+  #                            }
+  print(Sys.time())
+  # stopCluster(cl)
+  
+  # readr::write_rds(edge_list,
+  #                  'edge_list.rds')
   plan(sequential)
-  plan(multisession)
+  # plan(multisession)
   # edge_list <- data.frame(src = src_nodes,
   #                         dest = dest_nodes)
   
@@ -1247,20 +1325,40 @@ situs_neighor_gen_final = function(owner_data_used,
   #                   })
   #   return(NULL)
   # }
+  # gcs_save_file_upload('edge_list.rds',
+  #                      edge_list)
   print(head(edge_list))
-  situs_graph <- igraph::graph_from_edgelist(trimws(as.matrix(edge_list)), directed = TRUE)
+  situs_graph <- igraph::graph_from_edgelist(trimws(as.matrix(edge_list[,c('src',
+                                                                           'dest')
+                                                                        ]
+                                                              )
+                                                    ), directed = TRUE)
   
+  E(situs_graph)$weight <- edge_list$weight
+  
+  # situs_graph_undir <- igraph::graph_from_edgelist(trimws(as.matrix(edge_list[,c('src',
+  #                                                                          'dest')
+  # ]
+  # )
+  # ), directed = FALSE)
+  # 
+  # E(situs_graph_undir)$weight <- edge_list$weight
+  # situs_adj_matrix <- igraph::as_adjacency_matrix(situs_graph)
   # readr::write_rds(situs_graph, 
   #                  'situs_graph.rds')
   # gcs_save_file_upload('situs_graph.rds',
   #                      situs_graph)
-  # infomap_clusters <- igraph::cluster_infomap(situs_graph)
-  print('infomap')
-  # situs_adj_matrix <- igraph::as_adjacency_matrix(situs_graph)
+  labelProp_clusters <- igraph::cluster_label_prop(situs_graph,mode = 'out')
+  # louvain_clusters <- igraph::cluster_louvain(situs_graph_undir, 
+  #                                             weights = E(situs_graph)$weight
+  #                                             )
+  # 
+  print('labelprop')
+  
   # situs_graph_comps <-igraph::components(situs_graph)
-  situs_membership <- igraph::components(situs_graph)$membership
+  # situs_membership <- igraph::components(situs_graph)$membership
   # gsbm_model <- greed(situs_adj_matrix, model =DcSbm())
-  # situs_membership <- membership(infomap_clusters)
+  situs_membership <- membership(labelProp_clusters)
   situs_membership_size <- tapply(as.numeric(situs_membership),
                                   as.numeric(situs_membership),
                                   length)
@@ -1268,7 +1366,9 @@ situs_neighor_gen_final = function(owner_data_used,
   print('size')
   situs_membership_size <- situs_membership_size[order(situs_membership_size,
                                                        decreasing = TRUE)]
-  owner_data_used$group_assign <- 0
+  # readr::write_rds(situs_membership_size,
+  #                  'situs_membership_size.rds')
+  # owner_data_used$group_assign <- 0zZ
   # plan(multisession)
   # q<-sapply(1:100,#length(situs_membership_size), 
   #                 function(index){
@@ -1276,17 +1376,45 @@ situs_neighor_gen_final = function(owner_data_used,
   #                                   'group_assign'] <<- index
   #                   
   #                 }) #%>% futurize()
+  # 9635 31763    91  9524  1415  1466  8607  9109  1293  3298    49  4107  4042  3435    75  8269  7017  9672    10  6604    32 
+  # 4532  4052  2373  2232  1853  1690  1607  1574  1454  1298  1296  1146  1070  1064   901   882   867   831   820   785   772 
+  # 7998 16017  6535  4428    64  6721  7230  1018  7166  9253  9061  4128  6464  7123  6164  6903  7274  1225  1064  6724 31900 
+  # 760   662   621   594   592   588   588   584   576   573   571   563   542   532   525   523   512   497   476   474   456 
+  # 31641  6810  9769  5746  6653 16018  1130  5673 31844  6016 31894  4583 28774  5317 15475  5348 29101  1035  7151 31754  5910 
+  # 455   434   410   404   400   395   374   371   368   344   340   330   324   320   318   308   306   305   304   304   301 
+  # 9725 15430  1364  3511  6746 31899  9634  6213  8995  9229  9804  5350  8558   990  5856  6256  7265  7215  5578 31897 31898 
+  # 289   285   282   280   276   276   273   270   268   267   267   263   260   257   257   255   242   241   240   230   230 
+  # 6634  7150  9230  9783  6685  6785  6510  7010 24141  9706  5263  6607 29892  6303  6958  5471 
+  # 229   227   227   226   223   223   222   222   221   217   213   213   212   211   211   210
+  
+  print(head(situs_membership_size))
+  
   registerDoFuture()
   plan(multisession)
   
   print(Sys.time())
-  owner_data_used_final <- foreach(index=1:length(situs_membership_size),
-                                             .combine = 'rbind') %dopar%{
-                                               group_inds <- which(situs_membership==as.numeric(names(situs_membership_size)[index]))
-                                               data.frame(owner_data_used[names(situs_membership)[group_inds],],
-                                                    group_assign = rep(index,length(group_inds)))
-                                             }
-  
+  # owner_data_used_final <- foreach(index=1:length(situs_membership_size),
+  #                                            .combine = 'rbind') %dopar%{
+  #                                              group_inds <- which(situs_membership==as.numeric(names(situs_membership_size)[index]))
+  #                                              data.frame(owner_data_used[names(situs_membership)[group_inds],],
+  #                                                   group_assign = rep(index,length(group_inds)))
+  #                                            }
+  owner_data_used_final <- do.call(rbind, 
+                                   future.apply::future_sapply(1:length(situs_membership_size),
+                                      # .options.future = list(chunk.size = 10000,
+                                      #                        scheduling = 1),
+                                      # .combine = 'rbind',
+                                      # .inorder = FALSE
+                                      function(index){
+                                        group_inds <- which(situs_membership==as.numeric(names(situs_membership_size)[index]))
+                                        data.frame(owner_data_used[names(situs_membership)[group_inds],],
+                                                   group_assign = rep(index,length(group_inds)))
+                                        
+                                        # print(index)
+                                        # print(length(adj_list))
+                                        # print(tail(adj_list,1))
+                                       
+                                        }))
   print(Sys.time())
   print('assign')
   # owner_data_used[as.numeric(names(situs_membership)),'group_assign'] <- as.numeric(situs_membership)
