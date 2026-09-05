@@ -6,7 +6,7 @@
 # file_name = 'Travis-protaxExport-20260407.json'
 # tail(readLines(unz(base_path,
 #                    file_name)),100)
-
+options(future.globals.maxSize = 4e9)
 # Load packages required to define the pipeline:
 library(targets)
 library(tarchetypes) # Load other packages as needed.
@@ -30,6 +30,7 @@ library(doRNG)
 library(readr)
 library(tidygeocoder)
 library(censusapi)
+library(Matrix)
 # library(acs)
 library(googleCloudStorageR)
 library(tidycensus)
@@ -48,7 +49,7 @@ httr::set_config(httr::config(http_version = 2), override = TRUE)
 Sys.setenv('CURLOPT_HTTP_VERSION'=2)
 Sys.setenv('http_version'=2)
 # Sys.setenv(RETICULATE_PYTHON = "C:/Program Files/Python314/")
-options(future.globals.maxSize = 1.5 * 1e9)
+# options(future.globals.maxSize = 2.5 * 1e9)
 options(timeout = max(7200, getOption("timeout")))
 reticulate::import('pandas')
 reticulate::import('numpy')
@@ -79,6 +80,7 @@ Sys.getenv("CENSUS_KEY")
 # Set target options:
 library(googleCloudStorageR)
 library(gargle)
+#situs_pID = 231435` `situs_address = "74 AVERY DR CHARLOTTE 78052
 
 
 ## Fetch token. See: https://developers.google.com/identity/protocols/oauth2/scopes
@@ -96,6 +98,7 @@ tar_option_set(
                "forecast",
                "doFuture",
                "future",
+               "Matrix",
                "xgboost",
                "dplyr",
                "rvest",
@@ -126,7 +129,7 @@ tar_option_set(
   # debug  = 'tcad_data',
   # cue = tar_cue(mode = "never"),
   garbage_collection = 1,
-  # targets::tar_make(callr_function = NULL, use_crew = FALSE, as_job = FALSE)
+  # 
   #
   # Pipelines that take a long time to run may benefit from
   # optional distributed computing. To use this capability
@@ -330,11 +333,16 @@ list(
              owner_scrape_actual(austin_parcel_data_merged)
              # deployment = 'main'
              ),
+  
+  tar_target(owners_info_total,
+             parcel_geolocate(austin_parcel_data_merged_owner),
+             deployment = 'main'
+  ),
   tar_target(situs_owner_strings,
              command = {
                # if((is.na(file.size(tar_read_raw('situs_owner_strings')))|
                #                 (file.size(tar_read_raw('situs_owner_strings'))<80000000))){
-                 situs_owner_string_gen(austin_parcel_data_merged_owner)
+                 situs_owner_string_gen(owners_info_total)
                # }
              }
            # skip = TRUE,
@@ -379,13 +387,8 @@ list(
              # skip = sum(grepl('situs_group_assignments_final',
              #                  list.files("_targets\\objects")))>0
              ),
-
-  tar_target(owners_info_total,
-             parcel_geolocate(situs_group_assignments_final),
-             deployment = 'main'
-             ),
   tar_target(owners_data_total_supp,
-             final_data_merge(owners_info_total,
+             final_data_merge(situs_group_assignments_final,
                               hhi_data,
                               svi_data),
              deployment = 'main')
