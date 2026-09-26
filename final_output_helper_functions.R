@@ -84,7 +84,7 @@ name_clean = function(data_used){
   data_used <- toupper(iconv(data_used,to='UTF-8',
                              sub = 'byte'))
   
-  data_used <-gsub(paste(sapply(financial_markers_base,#,'[[:digit:]]{1}', 
+  data_used <-gsub(paste(sapply(c('LLP',financial_markers_base),#,'[[:digit:]]{1}', 
                                 function(s){sprintf('(^|[^[:alnum:]])%s($|[^[:alnum:]])',s)}
                                 ),
                          collapse = '|'),
@@ -96,7 +96,7 @@ name_clean = function(data_used){
                     '',
                     data_used,
                     useBytes = TRUE)
-  data_used <-gsub(paste(sapply(c('TO','BY', 'THE','AND','IN','ON','OF','US','TRUE','FALSE'#,'[[:digit:]]{1}'
+  data_used <-gsub(paste(sapply(c('TO','BY','AT','FOR', 'THE','AND','IN','ON','OF','US','TRUE','FALSE'#,'[[:digit:]]{1}'
                                   ),
                                 function(s){sprintf('(^|[^[:alnum:]])%s($|[^[:alnum:]])',
                                                     s)
@@ -106,8 +106,13 @@ name_clean = function(data_used){
                    ' ',
                    data_used,
                    useBytes = TRUE)
+  data_used <- gsub('(^|[^[:alnum:]])CO($|[^[:alnum:]])',
+                    ' COMPANY ',
+                    data_used,
+                    useBytes = TRUE)
   
-  data_used <- gsub('REAL PROPERT(IES|Y)|LIABILITY|BORROWER|MFR|SFR|JV([[:space:]])?[[:alnum:]]+|((LIFE|REAL) )?ESTATE|SERVICE(S)?|RODRIGUEZ|ATTN|AD VALOREM|TAX DEPT|PROPERTY TAX|TAX DEPARTMENT|TAX|DBA|FBO|FKA|LIVING|TRUST|REVOCABLE|CORP|CORPORATION|INCORPORATE(D)?|LIMITED',
+  
+  data_used <- gsub('CHRISTOPHER|EXEMPT|JUAN|MARTINEZ|WILLIAMS|SMITH|JOSE|RODRIGUEZ|INTERNATIONAL|DEPT|DEPARTMENT|PROPERT(IES|Y)|COMPANY|GROUP(S)?|COUNTY|REALTY|INVESTMENT(S)?|HOLDING(S)?|REAL PROPERT(IES|Y)|CHURCH|LIABILITY|BORROWER|MFR|SFR|JV([[:space:]])?[[:alnum:]]+|((LIFE|REAL) )?ESTATE|ATTN|AD VALOREM|TAX DEPT|PROPERTY TAX|TAX DEPARTMENT|TAX|DBA|FBO|FKA|LIVING|TRUST|REVOCABLE|CORP|CORPORATION|INCORPORATE(D)?|LIMITED',
                     '',
                     data_used,
                     useBytes = TRUE)
@@ -115,7 +120,13 @@ name_clean = function(data_used){
                     ' ',
                     data_used,
                     useBytes = TRUE)
+  data_used <- gsub('DEPARTM|DEP',
+                    '',
+                    data_used,
+                    useBytes = TRUE)
+  
   #INVESTMENT(S)?
+  # SERVICE(S)?
   # ENTERPRISE(S)?
   #HOLDING(S)?
   #GROUP(S)?
@@ -123,7 +134,7 @@ name_clean = function(data_used){
   #COMPANY
   #ASSOCIATION ASSN
   # print('sub1')
-  data_used <- gsub('TRST',
+  data_used <- gsub('(^|[^[:alnum:]])TRST($|[^[:alnum:]])',
                     'TRUST',
                     data_used,
                     useBytes = TRUE)
@@ -133,15 +144,12 @@ name_clean = function(data_used){
                       data_used,
                       useBytes = TRUE)
   
-  data_used <- gsub('CO',
-                    'COMPANY',
-                    data_used,
-                    useBytes = TRUE)
+  
   data_used <- gsub('PARTNER(S(HIP)?)?',
                     'PTSHP',
                     data_used,
                     useBytes = TRUE)
-    
+  
   data_used <- gsub('ASSOCIATION|ASSN',
                     'ASSOC',
                     data_used,
@@ -533,6 +541,7 @@ situs_owner_string_gen = function(owner_data){
                                 (is_owner_occupied==FALSE))|
                                (property_units>4),
                              property_units!=0,
+                             grepl('^[[:digit:]]', situs_address),
                              # nchar(owner_address)>20,
                              !is.na(property_units))
   
@@ -548,6 +557,7 @@ situs_owner_string_gen = function(owner_data){
                  registered_agent_string_list = registered_agent_string_list,
                  agent_string_sub = agent_string_sub,
                  name_clean = name_clean,
+                 address_clean = address_clean,
                  reg_agent_string_gen = reg_agent_string_gen,
                  financial_markers_base = financial_markers_base,
                  financial_marker_base_string = financial_marker_base_string)
@@ -600,9 +610,15 @@ situs_owner_string_gen = function(owner_data){
       result_string <- agent_string_sub(result_string,
                                         registered_agent_string_list$names)
       # message('reg name sub')
-      result_string <- name_clean(result_string)
+      
       message('name clean')
-      result_string[length(result_string)]
+      result_string <- name_clean(result_string)
+      result_string <- result_string[length(result_string)]
+      message('addr clean')
+      result_string <- address_clean(data.frame(result_string = result_string, 
+                                                row.names = '1'),
+                                     'result_string')
+      result_string
       
     }) %>%
     collect()
@@ -620,6 +636,7 @@ situs_owner_string_dist_matrix = function(situs_owner_strings,
                                        (is_owner_occupied==FALSE))|
                                       (property_units>4),
                                     property_units!=0,
+                                    grepl('^[[:digit:]]', situs_address),
                                     # nchar(owner_address)>20,
                                     !is.na(property_units))$situs_pID)
   print(length(pIDs_used))
@@ -751,13 +768,23 @@ situs_neighor_gen_clean = function(owner_data_used){
                  name_clean = name_clean,
                  financial_markers_base = financial_markers_base,
                  agent_string_sub = agent_string_sub,
+                 address_clean = address_clean,
                  reg_agent_string_gen = reg_agent_string_gen,
                  financial_marker_base_string = financial_marker_base_string)
   
   owner_data_used$row_num <- 1:nrow(owner_data_used)
   
+  owner_data_used$corp_business_name = address_clean(owner_data_used,
+                                                     'corp_business_name')
+  owner_data_used$owner_name = address_clean(owner_data_used,
+                                             'owner_name')
+  owner_data_used$owner_name_scraped = address_clean(owner_data_used,
+                                                     'owner_name_scraped')
+  owner_data_used$corp_registered_agent_name = address_clean(owner_data_used,
+                                                             'corp_registered_agent_name')
   
   owner_data_used_share <- mori::share(owner_data_used)
+  
   owner_data_used <- owner_data_used_share %>%
     partition(cl) %>%
     mutate(owner_address = name_clean(agent_string_sub(toupper(owner_address),
@@ -787,6 +814,8 @@ situs_neighor_gen_clean = function(owner_data_used){
     ) %>%
     collect()
   # print(dim(owner_data_used))
+
+                                              
   owner_data_used <- owner_data_used[order(owner_data_used$row_num,
                                            decreasing = FALSE),]
   
@@ -815,6 +844,7 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
                                        (is_owner_occupied==FALSE))|
                                       (property_units>4),
                                     property_units!=0,
+                                    grepl('^[[:digit:]]', situs_address),
                                     # nchar(owner_address)>20,
                                     !is.na(property_units))$situs_pID)
   print(Sys.time())
@@ -823,6 +853,7 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
                                             (is_owner_occupied==FALSE))|
                                            (property_units>4),
                                          property_units!=0,
+                                         grepl('^[[:digit:]]', situs_address),
                                          # nchar(owner_address)>20,
                                          !is.na(property_units))$situs_address)
   print(dim(owner_data_used %>%
@@ -833,22 +864,26 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
   cl <- multidplyr::new_cluster(round(3*parallel::detectCores()/5))
   # 
   
-  owner_data_used_names <-paste(' ',
+  #want to count owner name twice in neighbor calc, more weight placed on it
+  owner_data_used_names <-paste('_',
                                 paste(owner_data_used$owner_name_scraped,
                                       owner_data_used$owner_name,
+                                      owner_data_used$owner_name,
                                       owner_data_used$corp_business_name,
-                                      owner_data_used$corp_registered_agent_name
+                                      owner_data_used$corp_registered_agent_name,
+                                      sep = '__'
                                       ),
-                                ' ',
+                                '_',
                                 sep = '')
   
-  owner_data_used_addrs <-paste(' ',
+  owner_data_used_addrs <-paste('_',
                                 paste(owner_data_used$owner_address_scraped,
                                       owner_data_used$owner_address,
                                       owner_data_used$corp_mail_address,
-                                      owner_data_used$corp_registered_agent_mail_add
+                                      owner_data_used$corp_registered_agent_mail_add,
+                                      sep = '__'
                                       ),
-                                ' ',
+                                '_',
                                 sep = '')
   
   
@@ -862,11 +897,11 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
   owner_data_used_addrs_share <- mori::share(owner_data_used_addrs)
   multidplyr::cluster_assign(cl,
                              pIDs_used = pIDs_used,
-                             addresses_used = addresses_used
-                             # situs_owner_cosine_dist_matrix_share = situs_owner_cosine_dist_matrix_share
-                             # owner_data_used = owner_data_used
-                             # owner_data_used_names_share = owner_data_used_names_share,
-                             # owner_data_used_addrs_share = owner_data_used_addrs_share
+                             addresses_used = addresses_used,
+                             situs_owner_cosine_dist_matrix_share = situs_owner_cosine_dist_matrix_share,
+                             # owner_data_used_share = owner_data_used_share,
+                             owner_data_used_names_share = owner_data_used_names_share,
+                             owner_data_used_addrs_share = owner_data_used_addrs_share
   )
   
   situs_neighbor_ind <- owner_data_used_share %>%
@@ -890,11 +925,11 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
                                    corp_business_name,
                                    corp_registered_agent_name)))
     
-      names_used <- names_used[which(nchar(names_used)>11 )]
+      names_used <- names_used[which(nchar(names_used)>10 )]
       if(length(names_used)>0){
-        name_string_used <- sprintf(' %s ',
+        name_string_used <- sprintf('_%s_',
                                     paste(names_used,
-                                          collapse = ' | '))
+                                          collapse = '_|_'))
       }
       else{
         name_string_used <- character()
@@ -914,9 +949,9 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
       addrs_used <- addrs_used[which(nchar(addrs_used)>22)]
       # print(addrs_used)
       if(length(addrs_used)>0){
-        addr_string_used <- sprintf(' %s ',
+        addr_string_used <- sprintf('_%s_',
                                     paste(addrs_used,
-                                          collapse = ' | '))
+                                          collapse = '_|_'))
       }
       else{
         addr_string_used <- character()
@@ -1072,10 +1107,12 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
         # print(neighbors)
         # print('uniq')
         # print(n_uniq)
-        
         neighbors_final <- n_uniq[sapply(n_uniq,
                                          function(n_used){
-                                           name_conn <-2*as.numeric(name_neighs[which(names(name_neighs)==n_used)])
+                                           name_conn <-as.numeric(name_neighs[which(names(name_neighs)==n_used)])
+                                           # if(name_conn==1){
+                                           #   name_conn <- 2
+                                           # }
                                            addr_conn <- as.numeric(addr_neighs[which(names(addr_neighs)==n_used)])
                                            
                                            dist_conn <- as.numeric(dist_neighs) %in% n_used
@@ -1088,7 +1125,10 @@ situs_neighor_gen = function(situs_owner_cosine_dist_matrix,
         neighbors_final_edge_weights <- sapply(neighbors_final,
                                                                function(n_used){
                                                                  
-                                                                 name_conn <- 2*as.numeric(name_neighs[which(names(name_neighs)==n_used)])
+                                                                 name_conn <- as.numeric(name_neighs[which(names(name_neighs)==n_used)])
+                                                                 # if(name_conn==1){
+                                                                 #   name_conn <-2
+                                                                 # }
                                                                  addr_conn <- as.numeric(addr_neighs[which(names(addr_neighs)==n_used)])
                                                                  
                                                                  dist_conn <- as.numeric(dist_neighs) %in% n_used
@@ -1416,7 +1456,7 @@ situs_neighor_gen_final = function(owner_data_used,
   #                  'situs_graph.rds')
   # gcs_save_file_upload('situs_graph.rds',
   #                      situs_graph)
-  labelProp_clusters <- igraph::cluster_label_prop(situs_graph)
+  # labelProp_clusters <- igraph::cluster_label_prop(situs_graph)
   # louvain_clusters <- igraph::cluster_louvain(situs_graph_undir, 
   #                                             weights = E(situs_graph)$weight
   #                                             )
@@ -1424,9 +1464,9 @@ situs_neighor_gen_final = function(owner_data_used,
   print('labelprop')
   
   # situs_graph_comps <-igraph::components(situs_graph)
-  # situs_membership <- igraph::components(situs_graph)$membership
+  situs_membership <- igraph::components(situs_graph)$membership
   # gsbm_model <- greed(situs_adj_matrix, model =DcSbm())
-  situs_membership <- membership(labelProp_clusters)
+  # situs_membership <- membership(labelProp_clusters)
   situs_membership_size <- tapply(situs_membership,
                                   as.numeric(situs_membership),
                                   function(mems){
