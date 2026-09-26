@@ -48,6 +48,11 @@ library(Rfast)
 httr::set_config(httr::config(http_version = 2), override = TRUE)
 Sys.setenv('CURLOPT_HTTP_VERSION'=2)
 Sys.setenv('http_version'=2)
+# g_used <- 34
+# View(dplyr::filter(austin_parcel_data_merged_owner_clean,situs_address %in% dplyr::filter(owners_data_total_supp, group_assign== g_used)$situs_address ,situs_pID %in% dplyr::filter(owners_data_total_supp, group_assign==g_used)$situs_pID)[order(dplyr::filter(austin_parcel_data_merged_owner_clean,situs_address %in% dplyr::filter(owners_data_total_supp, group_assign== g_used)$situs_address ,situs_pID %in% dplyr::filter(owners_data_total_supp, group_assign==g_used)$situs_pID)$situs_address),])
+# View(dplyr::filter(owners_data_total_supp, group_assign==g_used)[order(dplyr::filter(owners_data_total_supp, group_assign==g_used)$situs_address),])
+# View(austin_parcel_data_merged_owner_clean[as.numeric(unlist(lapply(strsplit(situs_group_assignments_neigh$situs_neighbors[[989]], split = ' ')[[1]],function(index){strsplit(index, split = '-')[[1]][1]}))),])
+
 # Sys.setenv(RETICULATE_PYTHON = "C:/Program Files/Python314/")
 # options(future.globals.maxSize = 2.5 * 1e9)
 options(timeout = max(7200, getOption("timeout")))
@@ -86,6 +91,7 @@ library(gargle)
 ## Fetch token. See: https://developers.google.com/identity/protocols/oauth2/scopes
 # scope <-c("https://www.googleapis.com/auth/cloud-platform")
 # token <- token_fetch(scopes = scope)
+#service account key
 gcs_auth(json_file = "landlord-mapper-texas-triangle-948f8ad9d01e.json") # token = readRDS('token.rds'))
 # Sys.setenv('GAR_CLIENT_JSON'="landlord-mapper-texas-triangle-948f8ad9d01e.json")
 Sys.setenv("GCS_AUTH_FILE" = "landlord-mapper-texas-triangle-948f8ad9d01e.json")
@@ -127,10 +133,12 @@ tar_option_set(
                ), # Packages that your targets need for their tasks.
   format = "qs", # Optionally set the default storage format. qs is fast.
   # debug  = 'tcad_data',
+
+  
   # cue = tar_cue(mode = "never"),
   garbage_collection = 1,
   # 
-  #
+  #targets::tar_make(callr_function = NULL, use_crew = FALSE, as_job = FALSE)
   # Pipelines that take a long time to run may benefit from
   # optional distributed computing. To use this capability
   # in tar_make(), supply a {crew} controller
@@ -186,9 +194,64 @@ list(
              command = parse_hays_cad_data(),
            # skip = any(grepl('hays_data',list.files('_targets/objects'))),
              deployment = 'main'),
-  tar_target(pacs_data,
-             command = ingest_proton_pacs_cad_data('AUSTIN–SAN ANTONIO METROPLEX (13 of 13).zip'),
+  tar_target(austin_pacs_data,
+             command = {
+               bucket_objects <- gcs_list_objects()$name
+               
+               austin_zip_file <- bucket_objects[grepl('AUSTIN–SAN ANTONIO.*zip',
+                                                       bucket_objects)]
+               austin_data_dl <- tryCatch({insist_gcs_get(austin_zip_file,
+                                        saveToDisk = 'austin_pacs_data.zip',
+                                        overwrite = TRUE)},
+                                        error = function(cond){
+                                          cond
+                                          })  
+               
+               austin_pacs_data <- ingest_proton_pacs_cad_data('austin_pacs_data.zip')
+               file.remove('austin_pacs_data.zip')
+               austin_pacs_data
+               },
            # skip = any(grepl('pacs_data',list.files('_targets/objects'))),
+             deployment = 'main'),
+  tar_target(dfw_pacs_data,
+             command = {
+               
+               bucket_objects <- gcs_list_objects()$name
+               
+               dallas_zip_file <- bucket_objects[grepl('DALLAS–FORT.*zip',
+                                                       bucket_objects)]
+               
+               dfw_data_dl <- tryCatch({insist_gcs_get(dallas_zip_file,
+                                                          saveToDisk = 'dfw_pacs_data.zip',
+                                                          overwrite = TRUE)},
+                                          error = function(cond){
+                                            cond
+                                          })  
+               dfw_pacs_data <- ingest_proton_pacs_cad_data('dfw_pacs_data.zip')
+               file.remove('dfw_pacs_data.zip')
+               dfw_pacs_data
+             },
+             # skip = any(grepl('pacs_data',list.files('_targets/objects'))),
+             deployment = 'main'),
+  tar_target(houston_pacs_data,
+             command = {
+               bucket_objects <- gcs_list_objects()$name
+               
+               houston_zip_file <- bucket_objects[grepl('HOUSTON.*zip',
+                                                       bucket_objects)]
+               
+               houston_data_dl <- tryCatch({insist_gcs_get(houston_zip_file,
+                                                       saveToDisk = 'houston_pacs_data.zip',
+                                                       overwrite = TRUE)},
+                                       error = function(cond){
+                                         cond
+                                       })  
+               
+               houston_pacs_data <- ingest_proton_pacs_cad_data('houston_pacs_data.zip')
+               file.remove('houston_pacs_data.zip')
+               houston_pacs_data
+             },
+             # skip = any(grepl('pacs_data',list.files('_targets/objects'))),
              deployment = 'main'),
   tar_target(
     name = tcad_data_get,
@@ -319,11 +382,16 @@ list(
                                  ),
              deployment = 'main'),
   tar_target(austin_parcel_data_merged,
-             rbind(austin_parcel_data_merged_local,
-                   pacs_data,
-                   wcad_data_parsed,
-                   hays_data
-                   ),
+             {
+               file.remove('tcad_special_export.zip')
+               rbind(austin_parcel_data_merged_local,
+                     austin_pacs_data,
+                     houston_pacs_data,
+                     dfw_pacs_data,
+                     wcad_data_parsed,
+                     hays_data
+               )
+             },
              deployment = 'main'),
   # tar_target(austin_parcel_data_merged_code,
   #            code_compl_merge(austin_parcel_data_merged,
@@ -333,7 +401,6 @@ list(
              owner_scrape_actual(austin_parcel_data_merged)
              # deployment = 'main'
              ),
-  
   tar_target(owners_info_total,
              parcel_geolocate(austin_parcel_data_merged_owner),
              deployment = 'main'
@@ -356,7 +423,7 @@ list(
                # if( (is.na(file.size(tar_read_raw('situs_group_assignments')))|
                #      (file.size(tar_read_raw('situs_group_assignments'))<10000000))){
                  situs_owner_string_dist_matrix(situs_owner_strings,
-                                                austin_parcel_data_merged_owner)
+                                                owners_info_total)
                # }
              },
              # skip = TRUE,
@@ -367,7 +434,7 @@ list(
              {
                print(dim(situs_group_assignments))
                
-               situs_neighor_gen_clean(austin_parcel_data_merged_owner)
+               situs_neighor_gen_clean(owners_info_total)
              }
              # skip = TRUE
              # skip = sum(grepl('situs_group_assignments_final',
@@ -381,12 +448,13 @@ list(
              #                  list.files("_targets\\objects")))>0
              ),
   tar_target(situs_group_assignments_final,
-             situs_neighor_gen_final(austin_parcel_data_merged_owner,
+             situs_neighor_gen_final(owners_info_total,
                                     situs_group_assignments_neigh
                                      )
              # skip = sum(grepl('situs_group_assignments_final',
              #                  list.files("_targets\\objects")))>0
              ),
+  
   tar_target(owners_data_total_supp,
              final_data_merge(situs_group_assignments_final,
                               hhi_data,
